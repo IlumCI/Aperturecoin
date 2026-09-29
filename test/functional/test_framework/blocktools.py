@@ -50,7 +50,7 @@ MAX_BLOCK_SIGOPS = 20000
 MAX_BLOCK_SIGOPS_WEIGHT = MAX_BLOCK_SIGOPS * WITNESS_SCALE_FACTOR
 
 # Genesis block time (regtest)
-TIME_GENESIS_BLOCK = 1296688602
+TIME_GENESIS_BLOCK = 1790640002
 
 # From BIP141
 WITNESS_COMMITMENT_HEADER = b"\xaa\x21\xa9\xed"
@@ -113,6 +113,17 @@ def script_BIP34_coinbase_height(height):
         # Append dummy to increase scriptSig size above 2 (see bad-cb-length consensus rule)
         return CScript([res, OP_1])
     return CScript([CScriptNum(height)])
+
+
+# Regtest development fund script: P2WSH(OP_TRUE). Enforced only below
+# -devfundendheight (default 0, i.e. disabled on regtest).
+DEVFUND_REGTEST_SCRIPT = CScript([OP_0, sha256(CScript([OP_TRUE]))])
+DEVFUND_PERCENT = 5
+
+
+def devfund_amount(height):
+    """Minimum regtest development fund payment at the given height, if enforced."""
+    return ((50 * COIN) >> (height // 150)) * DEVFUND_PERCENT // 100
 
 
 def create_coinbase(height, pubkey=None, extra_output_script=None, fees=0):

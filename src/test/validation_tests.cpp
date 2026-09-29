@@ -49,13 +49,30 @@ BOOST_AUTO_TEST_CASE(subsidy_limit_test)
 {
     const auto chainParams = CreateChainParams(*m_node.args, CBaseChainParams::MAIN);
     CAmount nSum = 0;
-    for (int nHeight = 0; nHeight < 56000000; nHeight += 1000) {
+    // 1200 divides the mainnet halving interval (1,051,200), so this sum is exact.
+    for (int nHeight = 0; nHeight < 64 * 1051200; nHeight += 1200) {
         CAmount nSubsidy = GetBlockSubsidy(nHeight, chainParams->GetConsensus());
         BOOST_CHECK(nSubsidy <= 50 * COIN);
-        nSum += nSubsidy * 1000;
+        nSum += nSubsidy * 1200;
         BOOST_CHECK(MoneyRange(nSum));
     }
-    BOOST_CHECK_EQUAL(nSum, CAmount{8399999990760000});
+    BOOST_CHECK_EQUAL(nSum, CAmount{10511999988436800});
+}
+
+BOOST_AUTO_TEST_CASE(devfund_amount_test)
+{
+    const auto chainParams = CreateChainParams(*m_node.args, CBaseChainParams::MAIN);
+    const Consensus::Params& params = chainParams->GetConsensus();
+    BOOST_CHECK_EQUAL(GetDevFundAmount(0, params), 0);
+    BOOST_CHECK_EQUAL(GetDevFundAmount(1, params), 50 * COIN * 5 / 100);
+    BOOST_CHECK_EQUAL(GetDevFundAmount(params.nDevFundEndHeight - 1, params), 50 * COIN * 5 / 100);
+    BOOST_CHECK_EQUAL(GetDevFundAmount(params.nDevFundEndHeight, params), 0);
+    CAmount nSum = 0;
+    for (int nHeight = 0; nHeight < params.nDevFundEndHeight; nHeight += 1200) {
+        nSum += GetDevFundAmount(nHeight == 0 ? 1 : nHeight, params) * 1200;
+    }
+    // 5% of the first halving era: 1,051,200 blocks * 2.5 SCIENCE.
+    BOOST_CHECK_EQUAL(nSum, CAmount{2628000} * COIN);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

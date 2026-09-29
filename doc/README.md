@@ -1,40 +1,40 @@
-Litecoin Core
+ApertureCoin Core
 =============
 
 Setup
 ---------------------
-Litecoin Core is the original Litecoin client and it builds the backbone of the network. It downloads and, by default, stores the entire history of Litecoin transactions, which requires approximately 22 gigabytes of disk space. Depending on the speed of your computer and network connection, the synchronization process can take anywhere from a few hours to a day or more.
+ApertureCoin Core is the original ApertureCoin client and it builds the backbone of the network. It downloads and, by default, stores the entire history of ApertureCoin transactions, which requires approximately 22 gigabytes of disk space. Depending on the speed of your computer and network connection, the synchronization process can take anywhere from a few hours to a day or more.
 
-To download Litecoin Core, visit [litecoin.org](https://litecoin.org/).
+To download ApertureCoin Core, visit [github.com/IlumCI/Aperturecoin](https://github.com/IlumCI/Aperturecoin).
 
 Running
 ---------------------
-The following are some helpful notes on how to run Litecoin Core on your native platform.
+The following are some helpful notes on how to run ApertureCoin Core on your native platform.
 
 ### Unix
 
 Unpack the files into a directory and run:
 
-- `bin/litecoin-qt` (GUI) or
-- `bin/litecoind` (headless)
+- `bin/aperture-qt` (GUI) or
+- `bin/apertured` (headless)
 
 ### Windows
 
-Unpack the files into a directory, and then run litecoin-qt.exe.
+Unpack the files into a directory, and then run aperture-qt.exe.
 
 ### macOS
 
-Drag Litecoin Core to your applications folder, and then run Litecoin Core.
+Drag ApertureCoin Core to your applications folder, and then run ApertureCoin Core.
 
 ### Need Help?
 
-* See the documentation at the [Litecoin Wiki](https://litecoin.info/) for help and more information.
-* Ask for help on [#litecoin](https://webchat.freenode.net/#litecoin) on Freenode. If you don't have an IRC client, use [webchat here](https://webchat.freenode.net/#litecoin).
-* Ask for help on the [LitecoinTalk](https://litecointalk.io/) forums, in the [Technical Support board](https://litecointalk.io/c/technical-support).
+* See the documentation at the [ApertureCoin Wiki](https://aperture.info/) for help and more information.
+* Ask for help on [#aperture](https://webchat.freenode.net/#aperture) on Freenode. If you don't have an IRC client, use [webchat here](https://webchat.freenode.net/#aperture).
+* Ask for help on the [ApertureCoinTalk](https://aperturetalk.io/) forums, in the [Technical Support board](https://aperturetalk.io/c/technical-support).
 
 Building
 ---------------------
-The following are developer notes on how to build Litecoin Core on your native platform. They are not complete guides, but include notes on the necessary libraries, compile flags, etc.
+The following are developer notes on how to build ApertureCoin Core on your native platform. They are not complete guides, but include notes on the necessary libraries, compile flags, etc.
 
 - [Dependencies](dependencies.md)
 - [macOS Build Notes](build-osx.md)
@@ -47,7 +47,7 @@ The following are developer notes on how to build Litecoin Core on your native p
 
 Development
 ---------------------
-The Litecoin repo's [root README](/README.md) contains relevant information on the development process and automated testing.
+The ApertureCoin repo's [root README](/README.md) contains relevant information on the development process and automated testing.
 
 - [Developer Notes](developer-notes.md)
 - [Productivity Notes](productivity.md)
@@ -64,8 +64,8 @@ The Litecoin repo's [root README](/README.md) contains relevant information on t
 - [Benchmarking](benchmarking.md)
 
 ### Resources
-* Discuss on the [LitecoinTalk](https://litecointalk.io/) forums.
-* Discuss general Litecoin development on #litecoin-dev on Freenode. If you don't have an IRC client, use [webchat here](https://webchat.freenode.net/#litecoin-dev).
+* Discuss on the [ApertureCoinTalk](https://aperturetalk.io/) forums.
+* Discuss general ApertureCoin development on #aperture-dev on Freenode. If you don't have an IRC client, use [webchat here](https://webchat.freenode.net/#aperture-dev).
 
 ### Miscellaneous
 - [Assets Attribution](assets-attribution.md)

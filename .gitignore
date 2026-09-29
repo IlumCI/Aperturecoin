@@ -2,17 +2,17 @@
 
 *.exe
 *.pdb
-src/litecoin
-src/litecoind
-src/litecoin-cli
-src/litecoin-gui
-src/litecoin-node
-src/litecoin-tx
-src/litecoin-wallet
+src/aperture
+src/apertured
+src/aperture-cli
+src/aperture-gui
+src/aperture-node
+src/aperture-tx
+src/aperture-wallet
 src/test/fuzz/*
 !src/test/fuzz/*.*
-src/test/test_litecoin
-src/qt/test/test_litecoin-qt
+src/test/test_aperture
+src/qt/test/test_aperture-qt
 
 # autoreconf
 Makefile.in
@@ -94,7 +94,7 @@ src/qt/bitcoin-qt.includes
 *.qm
 Makefile
 !depends/Makefile
-src/qt/litecoin-qt
+src/qt/aperture-qt
 Litecoin-Qt.app
 background.tiff*
 
@@ -103,7 +103,7 @@ Makefile.am.user
 
 # Unit-tests
 Makefile.test
-litecoin-qt_test
+aperture-qt_test
 
 # Resources cpp
 qrc_*.cpp
@@ -118,7 +118,7 @@ releases
 *.gcno
 *.gcda
 /*.info
-test_litecoin.coverage/
+test_aperture.coverage/
 total.coverage/
 fuzz.coverage/
 coverage_percent.txt
@@ -149,3 +149,5 @@ db4/
 osx_volname
 dist/
 *.background.tiff
+configure~
+src/univalue/configure~

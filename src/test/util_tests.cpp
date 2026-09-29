@@ -2095,7 +2095,7 @@ BOOST_AUTO_TEST_CASE(message_sign)
     const std::string message = "Trust no one";
 
     const std::string expected_signature =
-        "IC5ptVNBb5AbIQAISbQxPem7QY7F/pijKxOUXs8M62GFciVCLvhp9XM/j+3Fu+RKbuEOxtzvUSFcxLnD36FXYfU=";
+        "IOUqHp/kZYa1SXISlU3jmV6hRtbHIi0QO4qhK4Vax04mMYOAj3c1GvXtt1ijsD580pn+4U+5+1HLdtM+3LsYPrM=";
 
     CKey privkey;
     std::string generated_signature;
@@ -2128,43 +2128,43 @@ BOOST_AUTO_TEST_CASE(message_verify)
 
     BOOST_CHECK_EQUAL(
         MessageVerify(
-            "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV",
+            "aZSiDLUzcedUhuLoZTXTxJogcWrYxXEGox",
             "signature should be irrelevant",
             "message too"),
         MessageVerificationResult::ERR_ADDRESS_NO_KEY);
 
     BOOST_CHECK_EQUAL(
         MessageVerify(
-            "LVHp936YwkddZXGF41n1H3Jp4QQPyhyKEy",
+            "ARqjXKeMCF3j7gn5SXT39uW9KnxpFAZEfJ",
             "invalid signature, not in base64 encoding",
             "message should be irrelevant"),
         MessageVerificationResult::ERR_MALFORMED_SIGNATURE);
 
     BOOST_CHECK_EQUAL(
         MessageVerify(
-            "LVHp936YwkddZXGF41n1H3Jp4QQPyhyKEy",
+            "ARqjXKeMCF3j7gn5SXT39uW9KnxpFAZEfJ",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             "message should be irrelevant"),
         MessageVerificationResult::ERR_PUBKEY_NOT_RECOVERED);
 
     BOOST_CHECK_EQUAL(
         MessageVerify(
-            "LZEyQ5Kez1CnmCAehso3wqu2LH6ux251aL",
-            "IC5ptVNBb5AbIQAISbQxPem7QY7F/pijKxOUXs8M62GFciVCLvhp9XM/j+3Fu+RKbuEOxtzvUSFcxLnD36FXYfU=",
+            "AVntnMsTEVctKMgV6PU5pi6MbffLAXBPje",
+            "IOUqHp/kZYa1SXISlU3jmV6hRtbHIi0QO4qhK4Vax04mMYOAj3c1GvXtt1ijsD580pn+4U+5+1HLdtM+3LsYPrM=",
             "I never signed this"),
         MessageVerificationResult::ERR_NOT_SIGNED);
 
     BOOST_CHECK_EQUAL(
         MessageVerify(
-            "LZEyQ5Kez1CnmCAehso3wqu2LH6ux251aL",
-            "IC5ptVNBb5AbIQAISbQxPem7QY7F/pijKxOUXs8M62GFciVCLvhp9XM/j+3Fu+RKbuEOxtzvUSFcxLnD36FXYfU=",
+            "AVntnMsTEVctKMgV6PU5pi6MbffLAXBPje",
+            "IOUqHp/kZYa1SXISlU3jmV6hRtbHIi0QO4qhK4Vax04mMYOAj3c1GvXtt1ijsD580pn+4U+5+1HLdtM+3LsYPrM=",
             "Trust no one"),
         MessageVerificationResult::OK);
 
     BOOST_CHECK_EQUAL(
         MessageVerify(
-            "LZEyQ5Kez1CnmCAehso3wqu2LH6ux251aL",
-            "IGOL/Q+AYFyofBBNVQlmmU4T/WkPRRCwpRPPKi/pA3QsByrTB3ZfQpDK8QlpUCTCaRLOBxogWrL/4yOxFZU4xiE=",
+            "AVntnMsTEVctKMgV6PU5pi6MbffLAXBPje",
+            "H9vAL5Itfd6++t60tVJHC/6eIPbWHRFTM9xH8AjM5CfdCgQT65TJQ90PDnYTFGTD+XYDb+aesZHN+3g+T9vGLaM=",
             "Trust me"),
         MessageVerificationResult::OK);
 }

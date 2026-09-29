@@ -29,7 +29,7 @@ import socket
 import struct
 import time
 
-import litecoin_scrypt
+from .aperture_matmulpow import getPoWHash
 from test_framework.siphash import siphash256
 from test_framework.util import hex_str_to_bytes, assert_equal
 
@@ -44,7 +44,7 @@ MAX_BLOOM_FILTER_SIZE = 36000
 MAX_BLOOM_HASH_FUNCS = 50
 
 COIN = 100000000  # 1 btc in satoshis
-MAX_MONEY = 84000000 * COIN
+MAX_MONEY = 105120000 * COIN
 
 BIP125_SEQUENCE_NUMBER = 0xfffffffd  # Sequence number that is BIP 125 opt-in and BIP 68-opt-out
 
@@ -687,7 +687,7 @@ class CTransaction:
     def is_valid(self):
         self.calc_sha256()
         for tout in self.vout:
-            if tout.nValue < 0 or tout.nValue > 84000000 * COIN:
+            if tout.nValue < 0 or tout.nValue > MAX_MONEY:
                 return False
         return True
 
@@ -707,7 +707,7 @@ class CTransaction:
 
 class CBlockHeader:
     __slots__ = ("hash", "hashMerkleRoot", "hashPrevBlock", "nBits", "nNonce",
-                 "nTime", "nVersion", "sha256", "scrypt256")
+                 "nTime", "nVersion", "sha256", "powhash256")
 
     def __init__(self, header=None):
         if header is None:
@@ -721,7 +721,7 @@ class CBlockHeader:
             self.nNonce = header.nNonce
             self.sha256 = header.sha256
             self.hash = header.hash
-            self.scrypt256 = header.scrypt256
+            self.powhash256 = header.powhash256
             self.calc_sha256()
 
     def set_null(self):
@@ -733,7 +733,7 @@ class CBlockHeader:
         self.nNonce = 0
         self.sha256 = None
         self.hash = None
-        self.scrypt256 = None
+        self.powhash256 = None
 
     def deserialize(self, f):
         self.nVersion = struct.unpack("<i", f.read(4))[0]
@@ -744,7 +744,7 @@ class CBlockHeader:
         self.nNonce = struct.unpack("<I", f.read(4))[0]
         self.sha256 = None
         self.hash = None
-        self.scrypt256 = None
+        self.powhash256 = None
 
     def serialize(self):
         r = b""
@@ -767,11 +767,11 @@ class CBlockHeader:
             r += struct.pack("<I", self.nNonce)
             self.sha256 = uint256_from_str(hash256(r))
             self.hash = encode(hash256(r)[::-1], 'hex_codec').decode('ascii')
-            self.scrypt256 = uint256_from_str(litecoin_scrypt.getPoWHash(r))
+            self.powhash256 = uint256_from_str(getPoWHash(r))
 
     def rehash(self):
         self.sha256 = None
-        self.scrypt256 = None
+        self.powhash256 = None
         self.calc_sha256()
         return self.sha256
 
@@ -846,7 +846,7 @@ class CBlock(CBlockHeader):
     def is_valid(self):
         self.calc_sha256()
         target = uint256_from_compact(self.nBits)
-        if self.scrypt256 > target:
+        if self.powhash256 > target:
             return False
         for tx in self.vtx:
             if not tx.is_valid():
@@ -858,7 +858,7 @@ class CBlock(CBlockHeader):
     def solve(self):
         self.rehash()
         target = uint256_from_compact(self.nBits)
-        while self.scrypt256 > target:
+        while self.powhash256 > target:
             self.nNonce += 1
             self.rehash()
 

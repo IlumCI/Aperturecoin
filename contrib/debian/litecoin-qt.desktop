@@ -1,17 +1,17 @@
 [Desktop Entry]
 Version=1.0
-Name=Litecoin Core
-Comment=Connect to the Litecoin P2P Network
-Comment[de]=Verbindung mit dem Litecoin Peer-to-Peer-Netzwerk herstellen
-Comment[es]=Conectar a la red P2P de Litecoin
-Comment[fr]=Se connecter au réseau pair à pair Litecoin
+Name=ApertureCoin Core
+Comment=Connect to the ApertureCoin P2P Network
+Comment[de]=Verbindung mit dem ApertureCoin Peer-to-Peer-Netzwerk herstellen
+Comment[es]=Conectar a la red P2P de ApertureCoin
+Comment[fr]=Se connecter au réseau pair à pair ApertureCoin
 GenericName=Cryptocurrency Wallet
-Exec=litecoin-qt %u
+Exec=aperture-qt %u
 Terminal=false
 Type=Application
-Icon=litecoin128
-MimeType=x-scheme-handler/litecoin;
+Icon=aperture128
+MimeType=x-scheme-handler/aperture;
 Categories=Office;Finance;Network;
-Keywords=litecoin;crypto;cryptocurrency;wallet;blockchain;
+Keywords=aperture;crypto;cryptocurrency;wallet;blockchain;
 StartupNotify=true
-StartupWMClass=Litecoin-qt
+StartupWMClass=ApertureCoin-qt

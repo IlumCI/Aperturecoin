@@ -2,10 +2,10 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-bin_PROGRAMS += qt/litecoin-qt
+bin_PROGRAMS += qt/aperture-qt
 
 if BUILD_BITCOIN_GUI
-  bin_PROGRAMS += litecoin-gui
+  bin_PROGRAMS += aperture-gui
 endif
 
 EXTRA_LIBRARIES += qt/libbitcoinqt.a
@@ -305,40 +305,40 @@ $(QT_MOC): $(QT_FORMS_H)
 $(qt_libbitcoinqt_a_OBJECTS) $(qt_bitcoin_qt_OBJECTS) $(bitcoin_gui_OBJECTS) : | $(QT_MOC)
 
 # bitcoin-qt and bitcoin-gui binaries #
-litecoin_qt_cppflags = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES) $(BITCOIN_QT_INCLUDES) \
+aperture_qt_cppflags = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES) $(BITCOIN_QT_INCLUDES) \
   $(QT_INCLUDES) $(QR_CFLAGS)
-litecoin_qt_cxxflags = $(AM_CXXFLAGS) $(QT_PIE_FLAGS)
+aperture_qt_cxxflags = $(AM_CXXFLAGS) $(QT_PIE_FLAGS)
 
-litecoin_qt_sources = qt/main.cpp
+aperture_qt_sources = qt/main.cpp
 if TARGET_WINDOWS
-  litecoin_qt_sources += $(BITCOIN_RC)
+  aperture_qt_sources += $(BITCOIN_RC)
 endif
-litecoin_qt_ldadd = qt/libbitcoinqt.a $(LIBBITCOIN_SERVER)
+aperture_qt_ldadd = qt/libbitcoinqt.a $(LIBBITCOIN_SERVER)
 if ENABLE_WALLET
-litecoin_qt_ldadd += $(LIBBITCOIN_UTIL) $(LIBBITCOIN_WALLET)
+aperture_qt_ldadd += $(LIBBITCOIN_UTIL) $(LIBBITCOIN_WALLET)
 endif
 if ENABLE_ZMQ
-litecoin_qt_ldadd += $(LIBBITCOIN_ZMQ) $(ZMQ_LIBS)
+aperture_qt_ldadd += $(LIBBITCOIN_ZMQ) $(ZMQ_LIBS)
 endif
-litecoin_qt_ldadd += $(LIBBITCOIN_CLI) $(LIBBITCOIN_COMMON) $(LIBBITCOIN_UTIL) $(LIBBITCOIN_CONSENSUS) $(LIBBITCOIN_CRYPTO) $(LIBUNIVALUE) $(LIBLEVELDB) $(LIBLEVELDB_SSE42) $(LIBMEMENV) \
+aperture_qt_ldadd += $(LIBBITCOIN_CLI) $(LIBBITCOIN_COMMON) $(LIBBITCOIN_UTIL) $(LIBBITCOIN_CONSENSUS) $(LIBBITCOIN_CRYPTO) $(LIBUNIVALUE) $(LIBLEVELDB) $(LIBLEVELDB_SSE42) $(LIBMEMENV) \
   $(LIBMW) $(MWEB_LIBS) $(BOOST_LIBS) $(QT_LIBS) $(QT_DBUS_LIBS) $(QR_LIBS) $(BDB_LIBS) $(MINIUPNPC_LIBS) $(LIBSECP256K1) $(CRYPTO_LIBS) \
   $(EVENT_PTHREADS_LIBS) $(EVENT_LIBS) $(SQLITE_LIBS)
-litecoin_qt_ldflags = $(RELDFLAGS) $(AM_LDFLAGS) $(QT_LDFLAGS) $(LIBTOOL_APP_LDFLAGS) $(PTHREAD_FLAGS)
-litecoin_qt_libtoolflags = $(AM_LIBTOOLFLAGS) --tag CXX
+aperture_qt_ldflags = $(RELDFLAGS) $(AM_LDFLAGS) $(QT_LDFLAGS) $(LIBTOOL_APP_LDFLAGS) $(PTHREAD_FLAGS)
+aperture_qt_libtoolflags = $(AM_LIBTOOLFLAGS) --tag CXX
 
-qt_litecoin_qt_CPPFLAGS = $(litecoin_qt_cppflags)
-qt_litecoin_qt_CXXFLAGS = $(litecoin_qt_cxxflags)
-qt_litecoin_qt_SOURCES = $(litecoin_qt_sources)
-qt_litecoin_qt_LDADD = $(litecoin_qt_ldadd)
-qt_litecoin_qt_LDFLAGS = $(litecoin_qt_ldflags)
-qt_litecoin_qt_LIBTOOLFLAGS = $(litecoin_qt_libtoolflags)
+qt_aperture_qt_CPPFLAGS = $(aperture_qt_cppflags)
+qt_aperture_qt_CXXFLAGS = $(aperture_qt_cxxflags)
+qt_aperture_qt_SOURCES = $(aperture_qt_sources)
+qt_aperture_qt_LDADD = $(aperture_qt_ldadd)
+qt_aperture_qt_LDFLAGS = $(aperture_qt_ldflags)
+qt_aperture_qt_LIBTOOLFLAGS = $(aperture_qt_libtoolflags)
 
-litecoin_gui_CPPFLAGS = $(litecoin_qt_cppflags)
-litecoin_gui_CXXFLAGS = $(litecoin_qt_cxxflags)
-litecoin_gui_SOURCES = $(litecoin_qt_sources)
-litecoin_gui_LDADD = $(litecoin_qt_ldadd)
-litecoin_gui_LDFLAGS = $(litecoin_qt_ldflags)
-litecoin_gui_LIBTOOLFLAGS = $(litecoin_qt_libtoolflags)
+aperture_gui_CPPFLAGS = $(aperture_qt_cppflags)
+aperture_gui_CXXFLAGS = $(aperture_qt_cxxflags)
+aperture_gui_SOURCES = $(aperture_qt_sources)
+aperture_gui_LDADD = $(aperture_qt_ldadd)
+aperture_gui_LDFLAGS = $(aperture_qt_ldflags)
+aperture_gui_LIBTOOLFLAGS = $(aperture_qt_libtoolflags)
 
 #locale/foo.ts -> locale/foo.qm
 QT_QM=$(QT_TS:.ts=.qm)
@@ -370,9 +370,9 @@ CLEAN_QT = $(nodist_qt_libbitcoinqt_a_SOURCES) $(QT_QM) $(QT_FORMS_H) qt/*.gcda 
 CLEANFILES += $(CLEAN_QT)
 
 bitcoin_qt_clean: FORCE
-	rm -f $(CLEAN_QT) $(qt_libbitcoinqt_a_OBJECTS) $(qt_litecoin_qt_OBJECTS) qt/litecoin-qt$(EXEEXT) $(LIBBITCOINQT)
+	rm -f $(CLEAN_QT) $(qt_libbitcoinqt_a_OBJECTS) $(qt_aperture_qt_OBJECTS) qt/aperture-qt$(EXEEXT) $(LIBBITCOINQT)
 
-bitcoin_qt : qt/litecoin-qt$(EXEEXT)
+bitcoin_qt : qt/aperture-qt$(EXEEXT)
 
 ui_%.h: %.ui
 	@test -f $(UIC)

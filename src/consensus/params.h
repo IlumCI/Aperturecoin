@@ -90,6 +90,18 @@ struct Params {
     int64_t nPowTargetSpacing;
     int64_t nPowTargetTimespan;
     int64_t DifficultyAdjustmentInterval() const { return nPowTargetTimespan / nPowTargetSpacing; }
+    /** ASERT difficulty adjustment half-life in seconds */
+    int64_t nASERTHalfLife;
+    /** ApertureMatMul proof-of-work matrix dimension (see doc/matmulpow.md) */
+    unsigned int nMatMulDim;
+    /**
+     * Development fund: every coinbase below nDevFundEndHeight must pay at
+     * least nDevFundPercent percent of the block subsidy (fees excluded) to
+     * devFundScript.
+     */
+    std::vector<uint8_t> devFundScript;
+    int nDevFundPercent{0};
+    int nDevFundEndHeight{0};
     /** The best chain should have at least this much work */
     uint256 nMinimumChainWork;
     /** By default assume that the signatures in ancestors of this block are valid */

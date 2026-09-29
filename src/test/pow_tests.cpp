@@ -11,52 +11,88 @@
 
 BOOST_FIXTURE_TEST_SUITE(pow_tests, BasicTestingSetup)
 
-/* Test calculation of next difficulty target with no constraints applying */
-BOOST_AUTO_TEST_CASE(get_next_work)
+static arith_uint256 ASERT(const Consensus::Params& params, const arith_uint256& ref, int64_t time_diff, int64_t height_diff)
 {
-    const auto chainParams = CreateChainParams(*m_node.args, CBaseChainParams::MAIN);
-    int64_t nLastRetargetTime = 1358118740; // Block #30240
-    CBlockIndex pindexLast;
-    pindexLast.nHeight = 280223;
-    pindexLast.nTime = 1358378777;  // Block #280223
-    pindexLast.nBits = 0x1c0ac141;
-    BOOST_CHECK_EQUAL(CalculateNextWorkRequired(&pindexLast, nLastRetargetTime, chainParams->GetConsensus()), 0x1c093f8dU);
+    return CalculateASERT(ref, params.nPowTargetSpacing, time_diff, height_diff, UintToArith256(params.powLimit), params.nASERTHalfLife);
 }
 
-/* Test the constraint on the upper bound for next work */
-BOOST_AUTO_TEST_CASE(get_next_work_pow_limit)
+/* On schedule, ASERT leaves the target unchanged. */
+BOOST_AUTO_TEST_CASE(asert_on_schedule)
 {
-    const auto chainParams = CreateChainParams(*m_node.args, CBaseChainParams::MAIN);
-    int64_t nLastRetargetTime = 1317972665; // Block #0
-    CBlockIndex pindexLast;
-    pindexLast.nHeight = 2015;
-    pindexLast.nTime = 1318480354;  // Block #2015
-    pindexLast.nBits = 0x1e0ffff0;
-    BOOST_CHECK_EQUAL(CalculateNextWorkRequired(&pindexLast, nLastRetargetTime, chainParams->GetConsensus()), 0x1e0fffffU);
+    const auto params = CreateChainParams(*m_node.args, CBaseChainParams::MAIN)->GetConsensus();
+    arith_uint256 ref;
+    ref.SetCompact(0x1d00ffff);
+    for (int64_t h : {0, 1, 10, 1000, 1000000}) {
+        BOOST_CHECK(ASERT(params, ref, h * params.nPowTargetSpacing, h) == ref);
+    }
 }
 
-/* Test the constraint on the lower bound for actual time taken */
-BOOST_AUTO_TEST_CASE(get_next_work_lower_limit_actual)
+/* Every half-life ahead of (behind) schedule doubles (halves) the target. */
+BOOST_AUTO_TEST_CASE(asert_half_life)
 {
-    const auto chainParams = CreateChainParams(*m_node.args, CBaseChainParams::MAIN);
-    int64_t nLastRetargetTime = 1401682934; // Block #66528
-    CBlockIndex pindexLast;
-    pindexLast.nHeight = 578591;
-    pindexLast.nTime = 1401757934;  // Block #578591
-    pindexLast.nBits = 0x1b075cf1;
-    BOOST_CHECK_EQUAL(CalculateNextWorkRequired(&pindexLast, nLastRetargetTime, chainParams->GetConsensus()), 0x1b01d73cU);
+    const auto params = CreateChainParams(*m_node.args, CBaseChainParams::MAIN)->GetConsensus();
+    arith_uint256 ref;
+    ref.SetCompact(0x1d00ffff);
+    const int64_t h = 5000;
+    const int64_t on_time = h * params.nPowTargetSpacing;
+    BOOST_CHECK(ASERT(params, ref, on_time + params.nASERTHalfLife, h) == ref * 2);
+    BOOST_CHECK(ASERT(params, ref, on_time + 3 * params.nASERTHalfLife, h) == ref * 8);
+    BOOST_CHECK(ASERT(params, ref, on_time - params.nASERTHalfLife, h) == ref / 2);
+    BOOST_CHECK(ASERT(params, ref, on_time - 4 * params.nASERTHalfLife, h) == ref / 16);
+
+    // Half a half-life ahead: 2^0.5 within the approximation error (< 0.013%).
+    const arith_uint256 half = ASERT(params, ref, on_time + params.nASERTHalfLife / 2, h);
+    const arith_uint256 expect = ref * 92682 / 65536; // floor(sqrt(2) * 65536) = 92681.9
+    const arith_uint256 err = half > expect ? half - expect : expect - half;
+    BOOST_CHECK(err * 10000 < expect * 2);
 }
 
-/* Test the constraint on the upper bound for actual time taken */
-BOOST_AUTO_TEST_CASE(get_next_work_upper_limit_actual)
+/* Target is monotonic in elapsed time and clamped to [1, powLimit]. */
+BOOST_AUTO_TEST_CASE(asert_monotonic_and_clamped)
+{
+    const auto params = CreateChainParams(*m_node.args, CBaseChainParams::MAIN)->GetConsensus();
+    const arith_uint256 pow_limit = UintToArith256(params.powLimit);
+    arith_uint256 ref;
+    ref.SetCompact(0x1d00ffff);
+    arith_uint256 prev{0};
+    for (int64_t t = -20 * params.nASERTHalfLife; t <= 20 * params.nASERTHalfLife; t += params.nASERTHalfLife / 7) {
+        const arith_uint256 next = ASERT(params, ref, 1000 * params.nPowTargetSpacing + t, 1000);
+        BOOST_CHECK(next >= prev);
+        BOOST_CHECK(next <= pow_limit);
+        prev = next;
+    }
+    BOOST_CHECK(ASERT(params, pow_limit, 1000 * params.nASERTHalfLife, 0) == pow_limit);
+    BOOST_CHECK(ASERT(params, arith_uint256(1), -1000 * params.nASERTHalfLife, 0) == arith_uint256(1));
+}
+
+/* Block 1 is mined at powLimit and anchors ASERT for later blocks. */
+BOOST_AUTO_TEST_CASE(get_next_work_asert_anchor)
 {
     const auto chainParams = CreateChainParams(*m_node.args, CBaseChainParams::MAIN);
-    int64_t nLastRetargetTime = 1463690315; // NOTE: Not an actual block time
-    CBlockIndex pindexLast;
-    pindexLast.nHeight = 1001951;
-    pindexLast.nTime = 1464900315;  // Block #46367
-    pindexLast.nBits = 0x1b015318;
-    BOOST_CHECK_EQUAL(CalculateNextWorkRequired(&pindexLast, nLastRetargetTime, chainParams->GetConsensus()), 0x1b054c60U);
+    const auto& params = chainParams->GetConsensus();
+    const unsigned int limit_bits = UintToArith256(params.powLimit).GetCompact();
+    std::vector<CBlockIndex> blocks(100);
+    for (int i = 0; i < 100; i++) {
+        blocks[i].pprev = i ? &blocks[i - 1] : nullptr;
+        blocks[i].nHeight = i;
+        blocks[i].nTime = 1790640000 + i * params.nPowTargetSpacing;
+        blocks[i].nBits = limit_bits;
+        blocks[i].BuildSkip();
+    }
+    CBlockHeader next;
+    next.nTime = blocks[0].nTime + params.nPowTargetSpacing;
+    BOOST_CHECK_EQUAL(GetNextWorkRequired(&blocks[0], &next, params), limit_bits);
+    // On schedule relative to block 1: unchanged.
+    next.nTime = blocks[99].nTime + params.nPowTargetSpacing;
+    BOOST_CHECK_EQUAL(GetNextWorkRequired(&blocks[99], &next, params), limit_bits);
+    // Blocks arriving twice as fast as scheduled raise the difficulty.
+    for (int i = 1; i < 100; i++) blocks[i].nTime = blocks[1].nTime + (i - 1) * params.nPowTargetSpacing / 2;
+    arith_uint256 target;
+    target.SetCompact(GetNextWorkRequired(&blocks[99], &next, params));
+    BOOST_CHECK(target < UintToArith256(params.powLimit));
+    // The genesis timestamp does not matter.
+    blocks[0].nTime = 1000000000;
+    BOOST_CHECK(arith_uint256().SetCompact(GetNextWorkRequired(&blocks[99], &next, params)) == target);
 }
 
 BOOST_AUTO_TEST_CASE(CheckProofOfWork_test_negative_target)
@@ -154,14 +190,20 @@ void sanity_check_chainparams(const ArgsManager& args, std::string chainName)
     BOOST_CHECK(!over);
     BOOST_CHECK(UintToArith256(consensus.powLimit) >= pow_compact);
 
-    // check max target * 4*nPowTargetTimespan doesn't overflow -- see pow.cpp:CalculateNextWorkRequired()
-    /* Litecoin: we allow overflowing by 1 bit
+    // ASERT at powLimit must not overflow in either direction
     if (!consensus.fPowNoRetargeting) {
-        arith_uint256 targ_max("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
-        targ_max /= consensus.nPowTargetTimespan*4;
-        BOOST_CHECK(UintToArith256(consensus.powLimit) < targ_max);
+        const arith_uint256 pow_limit = UintToArith256(consensus.powLimit);
+        BOOST_CHECK(consensus.nASERTHalfLife > 0);
+        // Compare in compact form: pre-shifting large targets drops low bits
+        // that nBits cannot represent anyway.
+        BOOST_CHECK_EQUAL(CalculateASERT(pow_limit, consensus.nPowTargetSpacing, 0, 0, pow_limit, consensus.nASERTHalfLife).GetCompact(), pow_limit.GetCompact());
+        BOOST_CHECK(CalculateASERT(pow_limit, consensus.nPowTargetSpacing, 50 * consensus.nASERTHalfLife, 0, pow_limit, consensus.nASERTHalfLife) == pow_limit);
+        BOOST_CHECK_EQUAL(CalculateASERT(pow_limit, consensus.nPowTargetSpacing, -consensus.nASERTHalfLife, 0, pow_limit, consensus.nASERTHalfLife).GetCompact(), arith_uint256(pow_limit / 2).GetCompact());
     }
-    */
+
+    // genesis satisfies its own proof of work
+    BOOST_CHECK(CheckProofOfWork(chainParams->GenesisBlock().GetUncachedPoWHash(consensus.nMatMulDim),
+                                 chainParams->GenesisBlock().nBits, consensus));
 }
 
 BOOST_AUTO_TEST_CASE(ChainParams_MAIN_sanity)

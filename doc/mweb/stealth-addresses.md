@@ -96,9 +96,9 @@ K<sub>o</sub> = HASH32('O'||e)⋅B<sub>i</sub>
 
 ### Implementation Notes
 
-* Litecoin Core MWEB uses tagged BLAKE3 hashes with one-byte domains (<code>'A'</code>, <code>'B'</code>, <code>'D'</code>, <code>'N'</code>, <code>'O'</code>, <code>'S'</code>, <code>'T'</code>, <code>'X'</code>, <code>'Y'</code>) and a multiplicative output-key tweak (<code>K<sub>o</sub> = B<sub>i</sub>⋅HASH32('O'||e)</code>).
+* ApertureCoin Core MWEB uses tagged BLAKE3 hashes with one-byte domains (<code>'A'</code>, <code>'B'</code>, <code>'D'</code>, <code>'N'</code>, <code>'O'</code>, <code>'S'</code>, <code>'T'</code>, <code>'X'</code>, <code>'Y'</code>) and a multiplicative output-key tweak (<code>K<sub>o</sub> = B<sub>i</sub>⋅HASH32('O'||e)</code>).
   * This differs from some DKSAP writeups that use additive output-key tweaks or define the view tag directly as the first byte of <code>e</code>.
 * Wallets must keep a map <code>B<sub>i</sub>->i</code> of all used spend pubkeys and the next several unused ones.
-* To be consistent with Litecoin Core, we recommend using the following derivation paths:
+* To be consistent with ApertureCoin Core, we recommend using the following derivation paths:
   * Master scan key <code>(a, A)</code>: <code>m/0'/100'/0'</code>
   * Master spend key <code>(b, B)</code>: <code>m/0'/100'/1'</code>

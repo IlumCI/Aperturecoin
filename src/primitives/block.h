@@ -53,7 +53,14 @@ public:
 
     uint256 GetHash() const;
 
+    /** ApertureMatMul proof-of-work hash (cached; see doc/matmulpow.md). */
     uint256 GetPoWHash() const;
+
+    /** ApertureMatMul proof-of-work hash for matrix dimension dim, bypassing the cache. */
+    uint256 GetUncachedPoWHash(unsigned int dim) const;
+
+    /** Write the 80-byte consensus serialization of the header. */
+    void SerializeHeader(unsigned char out[80]) const;
 
     int64_t GetBlockTime() const
     {

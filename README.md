@@ -1,85 +1,75 @@
-Litecoin Core integration/staging tree
-=====================================
+ApertureCoin Core
+=================
 
-[![Build Status](https://travis-ci.org/litecoin-project/litecoin.svg?branch=master)](https://travis-ci.org/litecoin-project/litecoin)
+https://github.com/IlumCI/Aperturecoin
 
-https://litecoin.org
+ApertureCoin (ticker **SCIENCE**) is an experimental proof-of-work
+cryptocurrency. Its proof of work is a matrix multiplication (ApertureMatMul)
+built for the int8 matrix engines in current AI accelerators and CPUs.
+ApertureCoin Core is forked from Litecoin Core 0.21 (itself derived from
+Bitcoin Core) and runs as an independent network with its own genesis block.
 
-What is Litecoin?
+Status: pre-launch. Neither mainnet nor testnet is running yet.
+
+Chain parameters
 ----------------
 
-Litecoin is an experimental digital currency that enables instant payments to
-anyone, anywhere in the world. Litecoin uses peer-to-peer technology to operate
-with no central authority: managing transactions and issuing money are carried
-out collectively by the network. Litecoin Core is the name of open source
-software which enables the use of this currency.
+| Parameter          | Value                                                                    |
+|--------------------|--------------------------------------------------------------------------|
+| Proof of work      | ApertureMatMul v1 (n = 512), see [doc/matmulpow.md](doc/matmulpow.md)    |
+| Block interval     | 120 s                                                                    |
+| Difficulty         | ASERT (aserti3-2d), per block, 2-day half-life, anchored at block 1      |
+| Block subsidy      | 50 SCIENCE, halving every 1,051,200 blocks (~4 years)                    |
+| Supply cap         | ~105,120,000 SCIENCE                                                     |
+| Development fund   | 5% of the subsidy until the first halving, enforced by consensus         |
+| Soft forks         | P2SH, BIP34/65/66, CSV, SegWit, Taproot enforced from genesis            |
+| MWEB               | disabled (the code is dormant; it stays active on regtest for coverage)  |
+| Addresses          | `sci1...` (bech32/bech32m), `A...` (P2PKH), `a...` (P2SH)                |
+| Default ports      | P2P 9433, RPC 9432; testnet 19435 / 19432; regtest 19544 / 19543         |
+| Binaries           | `apertured`, `aperture-cli`, `aperture-tx`, `aperture-wallet`, `aperture-qt` |
+| Data directory     | `~/.aperture`, configuration file `aperture.conf`                        |
 
-For more information, as well as an immediately useable, binary version of
-the Litecoin Core software, see [https://litecoin.org](https://litecoin.org).
+Design references (arXiv):
+
+- [2504.09971](https://arxiv.org/abs/2504.09971): proofs of useful work from
+  matrix multiplication. This is the basis for the planned useful-work
+  upgrade (v2).
+- [2606.04819](https://arxiv.org/abs/2606.04819): an empirical study of a
+  deployed matmul-PoW network doing no useful work. It is the reason v1 claims
+  only hardware alignment.
+- [2606.06700](https://arxiv.org/abs/2606.06700): the economics of
+  proof-of-useful-work.
+- [2511.11538](https://arxiv.org/abs/2511.11538): exploits against slow
+  retarget windows. This motivated the per-block ASERT adjustment.
+
+Mining
+------
+
+- **Regtest:** `generatetoaddress` mines on the CPU.
+- **External miners:** use `getblocktemplate` and `submitblock`. When the
+  development fund applies, the template includes a `devfund` object
+  (`script`, `amount`). The coinbase must pay at least that amount to that
+  script. `coinbasevalue` includes the fund.
+- **Reference implementation:** `src/crypto/matmulpow.cpp` in C++, and
+  `test/functional/test_framework/aperture_matmulpow.py` in Python.
+
+Building
+--------
+
+See `doc/build-*.md`. On Linux:
+
+```
+./autogen.sh
+./configure --with-incompatible-bdb
+make -j$(nproc)
+make check
+test/functional/test_runner.py
+```
 
 License
 -------
 
-Litecoin Core is released under the terms of the MIT license. See [COPYING](COPYING) for more
-information or see https://opensource.org/licenses/MIT.
-
-Development Process
--------------------
-
-The `master` branch is regularly built (see `doc/build-*.md` for instructions) and tested, but it is not guaranteed to be
-completely stable. [Tags](https://github.com/litecoin-project/litecoin/tags) are created
-regularly from release branches to indicate new official, stable release versions of Litecoin Core.
-
-The https://github.com/litecoin-project/gui repository is used exclusively for the
-development of the GUI. Its master branch is identical in all monotree
-repositories. Release branches and tags do not exist, so please do not fork
-that repository unless it is for development reasons.
-
-The contribution workflow is described in [CONTRIBUTING.md](CONTRIBUTING.md)
-and useful hints for developers can be found in [doc/developer-notes.md](doc/developer-notes.md).
-
-The developer [mailing list](https://groups.google.com/forum/#!forum/litecoin-dev)
-should be used to discuss complicated or controversial changes before working
-on a patch set.
-
-Developer IRC can be found on Freenode at #litecoin-dev.
-
-Testing
--------
-
-Testing and code review is the bottleneck for development; we get more pull
-requests than we can review and test on short notice. Please be patient and help out by testing
-other people's pull requests, and remember this is a security-critical project where any mistake might cost people
-lots of money.
-
-### Automated Testing
-
-Developers are strongly encouraged to write [unit tests](src/test/README.md) for new code, and to
-submit new unit tests for old code. Unit tests can be compiled and run
-(assuming they weren't disabled in configure) with: `make check`. Further details on running
-and extending unit tests can be found in [/src/test/README.md](/src/test/README.md).
-
-There are also [regression and integration tests](/test), written
-in Python, that are run automatically on the build server.
-These tests can be run (if the [test dependencies](/test) are installed) with: `test/functional/test_runner.py`
-
-The Travis CI system makes sure that every pull request is built for Windows, Linux, and macOS, and that unit/sanity tests are run automatically.
-
-### Manual Quality Assurance (QA) Testing
-
-Changes should be tested by somebody other than the developer who wrote the
-code. This is especially important for large or high-risk changes. It is useful
-to add a test plan to the pull request description if testing the changes is
-not straightforward.
-
-Translations
-------------
-
-We only accept translation fixes that are submitted through [Bitcoin Core's Transifex page](https://explore.transifex.com/bitcoin/bitcoin/).
-Translations are converted to Litecoin periodically.
-
-Translations are periodically pulled from Transifex and merged into the git repository. See the
-[translation process](doc/translation_process.md) for details on how this works.
-
-**Important**: We do not accept translation changes as GitHub pull requests because the next
-pull from Transifex would automatically overwrite them again.
+ApertureCoin Core is released under the terms of the MIT license. See
+[COPYING](COPYING) for more information or see
+https://opensource.org/licenses/MIT. It keeps the copyright notices of the
+Bitcoin Core and Litecoin Core developers.

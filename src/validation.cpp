@@ -657,7 +657,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
                 // insecure.
                 bool fReplacementOptOut = true;
 
-                // Litecoin: Only support BIP125 RBF when -mempoolreplacement arg is set
+                // ApertureCoin: Only support BIP125 RBF when -mempoolreplacement arg is set
                 if (gArgs.GetArg("-mempoolreplacement", DEFAULT_ENABLE_REPLACEMENT)) {
                     for (const CTxIn &_txin : ptxConflicting->vin)
                     {
@@ -1288,9 +1288,19 @@ CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
         return 0;
 
     CAmount nSubsidy = 50 * COIN;
-    // Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
+    // Subsidy is cut in half every nSubsidyHalvingInterval blocks (1,051,200
+    // on mainnet, approximately every 4 years at 120 second spacing).
     nSubsidy >>= halvings;
     return nSubsidy;
+}
+
+CAmount GetDevFundAmount(int nHeight, const Consensus::Params& consensusParams)
+{
+    if (nHeight < 1 || nHeight >= consensusParams.nDevFundEndHeight || consensusParams.nDevFundPercent <= 0 ||
+        consensusParams.devFundScript.empty()) {
+        return 0;
+    }
+    return GetBlockSubsidy(nHeight, consensusParams) * consensusParams.nDevFundPercent / 100;
 }
 
 CoinsViews::CoinsViews(
@@ -3739,6 +3749,22 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
         if (block.vtx[0]->vin[0].scriptSig.size() < expect.size() ||
             !std::equal(expect.begin(), expect.end(), block.vtx[0]->vin[0].scriptSig.begin())) {
             return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-height", "block height mismatch in coinbase");
+        }
+    }
+
+    // Enforce the development fund output
+    const CAmount nDevFund = GetDevFundAmount(nHeight, consensusParams);
+    if (nDevFund > 0) {
+        const CScript devFundScript(consensusParams.devFundScript.begin(), consensusParams.devFundScript.end());
+        bool found = false;
+        for (const CTxOut& out : block.vtx[0]->vout) {
+            if (out.scriptPubKey == devFundScript && out.nValue >= nDevFund) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-devfund", "coinbase does not pay the development fund");
         }
     }
 

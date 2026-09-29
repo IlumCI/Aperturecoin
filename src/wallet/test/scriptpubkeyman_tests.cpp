@@ -107,7 +107,7 @@ BOOST_AUTO_TEST_CASE(StealthAddresses)
     LegacyScriptPubKeyMan& keyman = *wallet.GetOrCreateLegacyScriptPubKeyMan();
 
     // Set HD seed
-    CKey key = DecodeSecret("6usgJoGKXW12i7Ruxy8Z1C5hrRMVGfLmi9NU9uDQJMPXDJ6tQAH");
+    CKey key = DecodeSecret("65H4u13XDs6NLbuHJUcaAB6LxZxY24Gt3Abn4A1zSyDpsjiwfAu");
     CPubKey seed = keyman.DeriveNewSeed(key);
     keyman.SetHDSeed(seed);
     keyman.TopUp();
@@ -120,21 +120,21 @@ BOOST_AUTO_TEST_CASE(StealthAddresses)
 
     // Check "change" (idx=0) address is USED
     StealthAddress change_address = mweb_keychain->GetStealthAddress(0);
-    BOOST_CHECK(EncodeDestination(change_address) == "ltcmweb1qq20e2arnhvxw97katjkmsd35agw3capxjkrkh7dk8d30rczm8ypxuq329nwh2twmchhqn3jqh7ua4ps539f6aazh79jy76urqht4qa59ts3at6gf");
+    BOOST_CHECK(EncodeDestination(change_address) == "scimweb1qq20e2arnhvxw97katjkmsd35agw3capxjkrkh7dk8d30rczm8ypxuq329nwh2twmchhqn3jqh7ua4ps539f6aazh79jy76urqht4qa59tsweq9fa");
     BOOST_CHECK(keyman.IsMine(change_address) == ISMINE_SPENDABLE);
     BOOST_CHECK(keyman.GetAllReserveKeys().find(change_address.B().GetID()) == keyman.GetAllReserveKeys().end());
     BOOST_CHECK(*keyman.GetMetadata(change_address)->mweb_index == 0);
 
     // Check "peg-in" (idx=1) address is USED
     StealthAddress pegin_address = mweb_keychain->GetStealthAddress(1);
-    BOOST_CHECK(EncodeDestination(pegin_address) == "ltcmweb1qqg5hddkl4uhspjwg9tkmatxa4s6gswdaq9swl8vsg5xxznmye7phcqatzc62mzkg788tsrfcuegxe9q3agf5cplw7ztqdusqf7x3n2tl55x4gvyt");
+    BOOST_CHECK(EncodeDestination(pegin_address) == "scimweb1qqg5hddkl4uhspjwg9tkmatxa4s6gswdaq9swl8vsg5xxznmye7phcqatzc62mzkg788tsrfcuegxe9q3agf5cplw7ztqdusqf7x3n2tl55e3rn9l");
     BOOST_CHECK(keyman.IsMine(pegin_address) == ISMINE_SPENDABLE);
     BOOST_CHECK(keyman.GetAllReserveKeys().find(pegin_address.B().GetID()) == keyman.GetAllReserveKeys().end());
     BOOST_CHECK(*keyman.GetMetadata(pegin_address)->mweb_index == 1);
 
     // Check first receive (idx=2) address is UNUSED
     StealthAddress receive_address = mweb_keychain->GetStealthAddress(2);
-    BOOST_CHECK(EncodeDestination(receive_address) == "ltcmweb1qq0yq03ewm830ugmkkvrvjmyyeslcpwk8ayd7k27qx63sryy6kx3ksqm3k6jd24ld3r5dp5lzx7rm7uyxfujf8sn7v4nlxeqwrcq6k6xxwqdc6tl3");
+    BOOST_CHECK(EncodeDestination(receive_address) == "scimweb1qq0yq03ewm830ugmkkvrvjmyyeslcpwk8ayd7k27qx63sryy6kx3ksqm3k6jd24ld3r5dp5lzx7rm7uyxfujf8sn7v4nlxeqwrcq6k6xxwqju3579");
     BOOST_CHECK(keyman.IsMine(receive_address) == ISMINE_SPENDABLE);
     BOOST_CHECK(keyman.GetAllReserveKeys().find(receive_address.B().GetID()) != keyman.GetAllReserveKeys().end());
     BOOST_CHECK(*keyman.GetMetadata(receive_address)->mweb_index == 2);
@@ -150,7 +150,7 @@ BOOST_AUTO_TEST_CASE(MalformedMWEBOutputKeys)
     wallet.SetMinVersion(WalletFeature::FEATURE_HD_SPLIT);
     LegacyScriptPubKeyMan& keyman = *wallet.GetOrCreateLegacyScriptPubKeyMan();
 
-    CKey seed_key = DecodeSecret("6usgJoGKXW12i7Ruxy8Z1C5hrRMVGfLmi9NU9uDQJMPXDJ6tQAH");
+    CKey seed_key = DecodeSecret("65H4u13XDs6NLbuHJUcaAB6LxZxY24Gt3Abn4A1zSyDpsjiwfAu");
     keyman.SetHDSeed(keyman.DeriveNewSeed(seed_key));
     keyman.TopUp();
 

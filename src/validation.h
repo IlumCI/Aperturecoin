@@ -192,6 +192,8 @@ bool ActivateBestChain(BlockValidationState& state, const CChainParams& chainpar
 bool ActivateArbitraryChain(BlockValidationState& state, CCoinsViewCache& view, const CChainParams& chainparams, CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams);
+/** Minimum amount the coinbase at nHeight must pay to the development fund script. */
+CAmount GetDevFundAmount(int nHeight, const Consensus::Params& consensusParams);
 
 /** Guess verification progress (as a fraction between 0.0=genesis and 1.0=current tip). */
 double GuessVerificationProgress(const ChainTxData& data, const CBlockIndex* pindex);
