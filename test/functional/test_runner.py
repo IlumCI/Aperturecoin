@@ -222,6 +222,7 @@ BASE_SCRIPTS = [
     'wallet_balance.py --descriptors',
     'feature_nulldummy.py',
     'feature_devfund.py',
+    'feature_sv2.py',
     'feature_nulldummy.py --descriptors',
     'mempool_accept.py',
     'mempool_expiry.py',
