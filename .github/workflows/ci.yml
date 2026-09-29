@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  linux:
+    name: Linux build + unit + functional tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool autotools-dev automake pkg-config bsdmainutils \
+            python3 libevent-dev libboost-dev libboost-system-dev libboost-filesystem-dev \
+            libboost-test-dev libboost-thread-dev libdb5.3++-dev libsqlite3-dev libfmt-dev libssl-dev
+      - name: Configure
+        run: |
+          ./autogen.sh
+          ./configure --without-gui --with-incompatible-bdb --disable-bench --without-miniupnpc --without-natpmp
+      - name: Build
+        run: make -j"$(nproc)"
+      - name: Unit tests
+        run: src/test/test_aperture
+      - name: Functional tests
+        run: test/functional/test_runner.py -j"$(nproc)" --timeout-factor=4 --combinedlogslen=4000
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-test-logs
+          path: /tmp/test_runner_*
+          if-no-files-found: ignore
+
+  guix:
+    name: Guix reproducible build (tags only)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Guix
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y guix
+          sudo systemctl start guix-daemon || true
+      - name: Guix build (x86_64-linux-gnu)
+        run: env HOSTS="x86_64-linux-gnu" ./contrib/guix/guix-build.sh
+      - name: Hashes
+        run: find guix-build-*/output -type f -print0 | xargs -0 sha256sum | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guix-x86_64-linux-gnu
+          path: |
+            guix-build-*/output/**
+            SHA256SUMS

@@ -38,7 +38,7 @@ and untracked files and directories will be wiped, allowing you to start anew.
 EOF
 }
 
-# Deterministically build Bitcoin Core for HOSTs (overridable by environment)
+# Deterministically build ApertureCoin Core for HOSTs (overridable by environment)
 # shellcheck disable=SC2153
 for host in ${HOSTS=x86_64-linux-gnu arm-linux-gnueabihf aarch64-linux-gnu riscv64-linux-gnu x86_64-w64-mingw32}; do
 
