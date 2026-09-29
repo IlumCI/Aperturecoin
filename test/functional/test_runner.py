@@ -228,6 +228,7 @@ BASE_SCRIPTS = [
     'feature_covenants.py',
     'feature_mandate.py',
     'feature_agent_payments.py',
+    'feature_batch_auction.py',
     'feature_nulldummy.py --descriptors',
     'mempool_accept.py',
     'mempool_expiry.py',
