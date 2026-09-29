@@ -5,6 +5,8 @@
 
 #include <script/standard.h>
 
+#include <primitives/token.h>
+
 #include <crypto/sha256.h>
 #include <pubkey.h>
 #include <script/script.h>
@@ -112,6 +114,13 @@ static bool MatchMultisig(const CScript& script, unsigned int& required, std::ve
 TxoutType Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned char>>& vSolutionsRet)
 {
     vSolutionsRet.clear();
+
+    // ApertureCoin: classify the locking bytecode behind a native token prefix.
+    if (token::HasTokenPrefix(scriptPubKey)) {
+        const CScript locking_bytecode{token::GetLockingBytecode(scriptPubKey)};
+        if (token::HasTokenPrefix(locking_bytecode)) return TxoutType::NONSTANDARD;
+        return Solver(locking_bytecode, vSolutionsRet);
+    }
 
     // Shortcut for pay-to-script-hash, which are more constrained than the other types:
     // it is always OP_HASH160 20 [20 byte hash] OP_EQUAL

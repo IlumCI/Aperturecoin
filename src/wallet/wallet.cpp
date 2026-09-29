@@ -5,6 +5,8 @@
 
 #include <wallet/wallet.h>
 
+#include <primitives/token.h>
+
 #include <chainparams.h>
 #include <chain.h>
 #include <consensus/consensus.h>
@@ -1565,9 +1567,17 @@ isminetype CWallet::IsMine(const CTxDestination& dest) const
     return IsMine(DestinationAddr(dest));
 }
 
-isminetype CWallet::IsMine(const DestinationAddr& script) const
+/** ApertureCoin: wallet lookups use the locking bytecode behind a native token prefix. */
+static DestinationAddr WithoutTokenPrefix(const DestinationAddr& addr)
+{
+    if (addr.IsMWEB() || !token::HasTokenPrefix(addr.GetScript())) return addr;
+    return DestinationAddr(token::GetLockingBytecode(addr.GetScript()));
+}
+
+isminetype CWallet::IsMine(const DestinationAddr& script_in) const
 {
     AssertLockHeld(cs_wallet);
+    const DestinationAddr script{WithoutTokenPrefix(script_in)};
     isminetype result = ISMINE_NO;
     for (const auto& spk_man_pair : m_spk_managers) {
         result = std::max(result, spk_man_pair.second->IsMine(script));
@@ -1598,8 +1608,9 @@ bool CWallet::IsChange(const CTxOutput& output) const
     return IsChange(output.GetScriptPubKey());
 }
 
-bool CWallet::IsChange(const DestinationAddr& script) const
+bool CWallet::IsChange(const DestinationAddr& script_in) const
 {
+    const DestinationAddr script{WithoutTokenPrefix(script_in)};
     if (script.IsMWEB()) {
         return GetMWWallet()->IsChange(script.GetMWEBAddress());
     }
@@ -2706,6 +2717,14 @@ void CWallet::AvailableCoins(std::vector<COutputCoin>& vCoins, bool fOnlySafe, c
 
             // Only consider selected coins if add_inputs is false
             if (coinControl && !coinControl->m_add_inputs && !coinControl->IsSelected(output.GetIndex())) {
+                continue;
+            }
+
+            // Outputs carrying native tokens are never used for ordinary
+            // payments (that would burn the tokens); token RPCs select them
+            // explicitly.
+            if (!output.IsMWEB() && token::HasTokenPrefix(output.GetScriptPubKey()) &&
+                !(coinControl && coinControl->IsSelected(output.GetIndex()))) {
                 continue;
             }
 
@@ -4362,8 +4381,9 @@ ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool intern
     return it->second;
 }
 
-std::set<ScriptPubKeyMan*> CWallet::GetScriptPubKeyMans(const DestinationAddr& dest_addr, SignatureData& sigdata) const
+std::set<ScriptPubKeyMan*> CWallet::GetScriptPubKeyMans(const DestinationAddr& dest_addr_in, SignatureData& sigdata) const
 {
+    const DestinationAddr dest_addr{WithoutTokenPrefix(dest_addr_in)};
     std::set<ScriptPubKeyMan*> spk_mans;
     for (const auto& spk_man_pair : m_spk_managers) {
         if (spk_man_pair.second->CanProvide(dest_addr, sigdata)) {
@@ -4373,8 +4393,9 @@ std::set<ScriptPubKeyMan*> CWallet::GetScriptPubKeyMans(const DestinationAddr& d
     return spk_mans;
 }
 
-ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const DestinationAddr& dest_addr) const
+ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const DestinationAddr& dest_addr_in) const
 {
+    const DestinationAddr dest_addr{WithoutTokenPrefix(dest_addr_in)};
     SignatureData sigdata;
     for (const auto& spk_man_pair : m_spk_managers) {
         if (spk_man_pair.second->CanProvide(dest_addr, sigdata)) {
@@ -4398,8 +4419,9 @@ std::unique_ptr<SigningProvider> CWallet::GetSolvingProvider(const DestinationAd
     return GetSolvingProvider(script, sigdata);
 }
 
-std::unique_ptr<SigningProvider> CWallet::GetSolvingProvider(const DestinationAddr& script, SignatureData& sigdata) const
+std::unique_ptr<SigningProvider> CWallet::GetSolvingProvider(const DestinationAddr& script_in, SignatureData& sigdata) const
 {
+    const DestinationAddr script{WithoutTokenPrefix(script_in)};
     for (const auto& spk_man_pair : m_spk_managers) {
         if (spk_man_pair.second->CanProvide(script, sigdata)) {
             return spk_man_pair.second->GetSolvingProvider(script);

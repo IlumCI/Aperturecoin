@@ -6,6 +6,10 @@
 
 #include <chainparams.h>
 #include <consensus/consensus.h>
+#include <primitives/token.h>
+#include <set>
+#include <map>
+#include <limits>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
 #include <consensus/validation.h>
@@ -140,8 +144,9 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& in
         const Coin& coin = inputs.AccessCoin(tx.vin[i].prevout);
         assert(!coin.IsSpent());
         const CTxOut &prevout = coin.out;
-        if (prevout.scriptPubKey.IsPayToScriptHash())
-            nSigOps += prevout.scriptPubKey.GetSigOpCount(tx.vin[i].scriptSig);
+        const CScript locking_bytecode{token::GetLockingBytecode(prevout.scriptPubKey)};
+        if (locking_bytecode.IsPayToScriptHash())
+            nSigOps += locking_bytecode.GetSigOpCount(tx.vin[i].scriptSig);
     }
     return nSigOps;
 }
@@ -162,10 +167,123 @@ int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& i
         const Coin& coin = inputs.AccessCoin(tx.vin[i].prevout);
         assert(!coin.IsSpent());
         const CTxOut &prevout = coin.out;
-        nSigOps += CountWitnessSigOps(tx.vin[i].scriptSig, prevout.scriptPubKey, &tx.vin[i].scriptWitness, flags);
+        nSigOps += CountWitnessSigOps(tx.vin[i].scriptSig, token::GetLockingBytecode(prevout.scriptPubKey), &tx.vin[i].scriptWitness, flags);
     }
     return nSigOps;
 }
+
+namespace {
+
+/**
+ * Native token conservation (doc/tokens.md, CashTokens CHIP-2022-02 rules):
+ * - a new category can only be created by an input spending an outpoint with
+ *   index 0; its ID is that outpoint's txid (genesis)
+ * - fungible amounts per category cannot exceed the inputs' amounts, except
+ *   for categories created in this transaction
+ * - NFTs must be justified by inputs: a minting NFT (or genesis) allows any
+ *   NFT of its category; a mutable NFT allows one NFT with any commitment and
+ *   capability none/mutable; an immutable NFT passes through unchanged
+ * Output token prefixes were checked by CheckTransaction.
+ */
+bool CheckTokenConservation(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs)
+{
+    bool any_tokens{false};
+    for (const CTxOut& out : tx.vout) any_tokens |= token::HasTokenPrefix(out.scriptPubKey);
+    for (const CTxIn& in : tx.vin) any_tokens |= token::HasTokenPrefix(inputs.AccessCoin(in.prevout).out.scriptPubKey);
+    if (!any_tokens) return true;
+
+    std::set<uint256> genesis;
+    std::set<uint256> categories_in;
+    std::set<uint256> minting_in;
+    std::map<uint256, int64_t> ft_in;
+    std::map<uint256, std::multiset<std::vector<unsigned char>>> immutable_in;
+    std::map<uint256, int64_t> mutable_in;
+
+    for (const CTxIn& in : tx.vin) {
+        if (in.prevout.n == 0) genesis.insert(in.prevout.hash);
+        const CScript& spk{inputs.AccessCoin(in.prevout).out.scriptPubKey};
+        token::TokenData td;
+        const token::ParseResult parsed{token::Parse(spk, td)};
+        if (parsed == token::ParseResult::NO_TOKEN) continue;
+        if (parsed != token::ParseResult::OK) {
+            return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-token-input-prefix");
+        }
+        categories_in.insert(td.category);
+        if (td.amount > 0) {
+            int64_t& sum{ft_in[td.category]};
+            if (td.amount > std::numeric_limits<int64_t>::max() - sum) {
+                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-token-amount-overflow");
+            }
+            sum += td.amount;
+        }
+        if (td.nft) {
+            switch (td.nft->capability) {
+            case token::Capability::NONE: immutable_in[td.category].insert(td.nft->commitment); break;
+            case token::Capability::MUTABLE: ++mutable_in[td.category]; break;
+            case token::Capability::MINTING: minting_in.insert(td.category); break;
+            }
+        }
+    }
+
+    std::map<uint256, int64_t> ft_out;
+    std::vector<std::pair<uint256, token::NFT>> nft_out;
+    for (const CTxOut& out : tx.vout) {
+        token::TokenData td;
+        if (token::Parse(out.scriptPubKey, td) != token::ParseResult::OK) continue;
+        if (!categories_in.count(td.category) && !genesis.count(td.category)) {
+            return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-token-category",
+                                 strprintf("category %s has no input and no genesis", td.category.GetHex()));
+        }
+        if (td.amount > 0) {
+            int64_t& sum{ft_out[td.category]};
+            if (td.amount > std::numeric_limits<int64_t>::max() - sum) {
+                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-token-amount-overflow");
+            }
+            sum += td.amount;
+        }
+        if (td.nft) nft_out.emplace_back(td.category, *td.nft);
+    }
+
+    for (const auto& [category, amount] : ft_out) {
+        if (genesis.count(category)) continue;
+        if (amount > ft_in[category]) {
+            return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-token-amount-inflation",
+                                 strprintf("category %s: %d out > %d in", category.GetHex(), amount, ft_in[category]));
+        }
+    }
+
+    // Pass 1: immutable outputs that exactly match an immutable input. Pass 2:
+    // remaining outputs consume mutable inputs. Using exact matches first is
+    // optimal, since mutable inputs can justify any non-minting output.
+    std::vector<const std::pair<uint256, token::NFT>*> unmatched;
+    for (const auto& entry : nft_out) {
+        const auto& [category, nft] = entry;
+        if (genesis.count(category) || minting_in.count(category)) continue;
+        if (nft.capability == token::Capability::MINTING) {
+            return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-token-nft-minting");
+        }
+        if (nft.capability == token::Capability::NONE) {
+            auto& available{immutable_in[category]};
+            const auto it{available.find(nft.commitment)};
+            if (it != available.end()) {
+                available.erase(it);
+                continue;
+            }
+        }
+        unmatched.push_back(&entry);
+    }
+    for (const auto* entry : unmatched) {
+        int64_t& slots{mutable_in[entry->first]};
+        if (slots <= 0) {
+            return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-token-nft-ex-nihilo",
+                                 strprintf("category %s: NFT not justified by inputs", entry->first.GetHex()));
+        }
+        --slots;
+    }
+    return true;
+}
+
+} // namespace
 
 bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee)
 {
@@ -206,6 +324,10 @@ bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, 
     if (nValueIn < value_out) {
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-in-belowout",
             strprintf("value in (%s) < value out (%s)", FormatMoney(nValueIn), FormatMoney(value_out)));
+    }
+
+    if (!CheckTokenConservation(tx, state, inputs)) {
+        return false; // state filled in by CheckTokenConservation
     }
 
     // Tally transaction fees

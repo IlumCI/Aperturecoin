@@ -431,6 +431,7 @@ libbitcoin_wallet_a_SOURCES = \
   wallet/load.cpp \
   wallet/reserve.cpp \
   wallet/rpcdump.cpp \
+  wallet/rpctokens.cpp \
   wallet/rpcwallet.cpp \
   wallet/salvage.cpp \
   wallet/scriptpubkeyman.cpp \
@@ -527,6 +528,8 @@ libbitcoin_consensus_a_SOURCES = \
   prevector.h \
   primitives/block.cpp \
   primitives/block.h \
+  primitives/token.cpp \
+  primitives/token.h \
   primitives/transaction.cpp \
   primitives/transaction.h \
   pubkey.cpp \

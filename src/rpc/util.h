@@ -81,6 +81,13 @@ extern std::vector<unsigned char> ParseHexO(const UniValue& o, std::string strKe
 CoinStatsHashType ParseHashType(const UniValue& param, const CoinStatsHashType default_type);
 
 extern CAmount AmountFromValue(const UniValue& value);
+namespace token { struct TokenData; }
+/**
+ * Parse native token data from JSON:
+ * {"category": hex, "amount": n or "n", "nft": {"capability": "none|mutable|minting", "commitment": hex}}.
+ * Throws JSONRPCError on invalid input.
+ */
+token::TokenData ParseTokenData(const UniValue& value);
 extern std::string HelpExampleCli(const std::string& methodname, const std::string& args);
 extern std::string HelpExampleRpc(const std::string& methodname, const std::string& args);
 

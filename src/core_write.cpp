@@ -4,6 +4,8 @@
 
 #include <core_io.h>
 
+#include <primitives/token.h>
+
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
 #include <key_io.h>
@@ -14,6 +16,20 @@
 #include <univalue.h>
 #include <util/system.h>
 #include <util/strencodings.h>
+
+UniValue TokenDataToUniv(const token::TokenData& token_data)
+{
+    UniValue out(UniValue::VOBJ);
+    out.pushKV("category", token_data.category.GetHex());
+    out.pushKV("amount", std::to_string(token_data.amount));
+    if (token_data.nft) {
+        UniValue nft(UniValue::VOBJ);
+        nft.pushKV("capability", token::CapabilityToString(token_data.nft->capability));
+        nft.pushKV("commitment", HexStr(token_data.nft->commitment));
+        out.pushKV("nft", nft);
+    }
+    return out;
+}
 
 UniValue ValueFromAmount(const CAmount& amount)
 {
@@ -238,6 +254,11 @@ void TxToUniv(const CTransaction& tx, const uint256& hashBlock, UniValue& entry,
             UniValue o(UniValue::VOBJ);
             ScriptPubKeyToUniv(txout.scriptPubKey, o, true);
             out.pushKV("scriptPubKey", o);
+
+            token::TokenData token_data;
+            if (token::Parse(txout.scriptPubKey, token_data) == token::ParseResult::OK) {
+                out.pushKV("tokenData", TokenDataToUniv(token_data));
+            }
         }
 
         vout.push_back(out);

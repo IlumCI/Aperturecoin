@@ -7,6 +7,8 @@
 
 #include <policy/policy.h>
 
+#include <primitives/token.h>
+
 #include <consensus/validation.h>
 #include <mweb/mweb_policy.h>
 #include <coins.h>
@@ -28,14 +30,15 @@ CAmount GetDustThreshold(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
     // so dust is a spendable txout less than
     // 98*dustRelayFee/1000 (in satoshis).
     // 294 satoshis at the default rate of 3000 sat/kB.
-    if (txout.scriptPubKey.IsUnspendable())
+    const CScript locking_bytecode{token::GetLockingBytecode(txout.scriptPubKey)};
+    if (locking_bytecode.IsUnspendable())
         return 0;
 
     size_t nSize = GetSerializeSize(txout);
     int witnessversion = 0;
     std::vector<unsigned char> witnessprogram;
 
-    if (txout.scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
+    if (locking_bytecode.IsWitnessProgram(witnessversion, witnessprogram)) {
         // sum the sizes of the parts of a transaction input
         // with 75% segwit discount applied to the script size.
         nSize += (32 + 4 + 1 + (107 / WITNESS_SCALE_FACTOR) + 4);
@@ -219,7 +222,7 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
         const CTxOut &prev = mapInputs.AccessCoin(tx.vin[i].prevout).out;
 
         // get the scriptPubKey corresponding to this input:
-        CScript prevScript = prev.scriptPubKey;
+        CScript prevScript = token::GetLockingBytecode(prev.scriptPubKey);
 
         bool p2sh = false;
         if (prevScript.IsPayToScriptHash()) {

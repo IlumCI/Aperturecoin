@@ -23,6 +23,8 @@ Chain parameters
 | Supply cap         | ~105,120,000 SCIENCE                                                     |
 | Development fund   | 1.5% of the subsidy until the first halving, enforced by consensus       |
 | Soft forks         | P2SH, BIP34/65/66, CSV, SegWit, Taproot enforced from genesis            |
+| Native tokens      | fungible + NFT (CashTokens semantics) from genesis, see [doc/tokens.md](doc/tokens.md) |
+| Mining protocol    | Stratum V2 Template Provider + reference miner, see [doc/stratum-v2.md](doc/stratum-v2.md) |
 | MWEB               | disabled (the code is dormant; it stays active on regtest for coverage)  |
 | Addresses          | `sci1...` (bech32/bech32m), `A...` (P2PKH), `a...` (P2SH)                |
 | Default ports      | P2P 9433, RPC 9432; testnet 19435 / 19432; regtest 19544 / 19543         |
@@ -60,7 +62,7 @@ See `doc/build-*.md`. On Linux:
 
 ```
 ./autogen.sh
-./configure --with-incompatible-bdb
+./configure --with-incompatible-bdb   # C++17 compiler required
 make -j$(nproc)
 make check
 test/functional/test_runner.py

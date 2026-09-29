@@ -395,7 +395,9 @@ static RPCHelpMan createrawtransaction()
                         {
                             {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
                                 {
-                                    {"address", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "A key-value pair. The key (string) is the aperture address, the value (float or string) is the amount in " + CURRENCY_UNIT},
+                                    {"address", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "A key-value pair. The key (string) is the aperture address, the value (float or string) is the amount in " + CURRENCY_UNIT + ".\n"
+                                        "To attach native tokens, the value is an object {\"amount\": x, \"token\": {\"category\": hex, \"amount\": n, \"nft\": {\"capability\": \"none|mutable|minting\", \"commitment\": hex}}}.\n"
+                                        "A new category is created by spending an outpoint with index 0; its category is that outpoint's txid."},
                                 },
                                 },
                             {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
@@ -1436,7 +1438,9 @@ static RPCHelpMan createpsbt()
                         {
                             {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
                                 {
-                                    {"address", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "A key-value pair. The key (string) is the aperture address, the value (float or string) is the amount in " + CURRENCY_UNIT},
+                                    {"address", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "A key-value pair. The key (string) is the aperture address, the value (float or string) is the amount in " + CURRENCY_UNIT + ".\n"
+                                        "To attach native tokens, the value is an object {\"amount\": x, \"token\": {\"category\": hex, \"amount\": n, \"nft\": {\"capability\": \"none|mutable|minting\", \"commitment\": hex}}}.\n"
+                                        "A new category is created by spending an outpoint with index 0; its category is that outpoint's txid."},
                                 },
                                 },
                             {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",

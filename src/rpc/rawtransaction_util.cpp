@@ -9,6 +9,7 @@
 #include <core_io.h>
 #include <key_io.h>
 #include <policy/policy.h>
+#include <primitives/token.h>
 #include <primitives/transaction.h>
 #include <rpc/request.h>
 #include <rpc/util.h>
@@ -123,7 +124,16 @@ CMutableTransaction ConstructTransaction(const UniValue& inputs_in, const UniVal
             }
 
             CScript scriptPubKey = GetScriptForDestination(destination);
-            CAmount nAmount = AmountFromValue(outputs[name_]);
+            CAmount nAmount;
+            const UniValue& value = outputs[name_];
+            if (value.isObject()) {
+                // {"amount": x, "token": {...}}: an output carrying native tokens.
+                RPCTypeCheckObj(value, {{"amount", UniValueType()}, {"token", UniValueType(UniValue::VOBJ)}}, false, true);
+                nAmount = AmountFromValue(find_value(value, "amount"));
+                scriptPubKey = token::Encode(ParseTokenData(find_value(value, "token")), scriptPubKey);
+            } else {
+                nAmount = AmountFromValue(value);
+            }
 
             CTxOut out(nAmount, scriptPubKey);
             rawTx.vout.push_back(out);

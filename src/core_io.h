@@ -40,6 +40,9 @@ int ParseSighashString(const UniValue& sighash);
 
 // core_write.cpp
 UniValue ValueFromAmount(const CAmount& amount);
+namespace token { struct TokenData; }
+/** JSON form of native token data: {category, amount (string), nft: {capability, commitment}}. */
+UniValue TokenDataToUniv(const token::TokenData& token_data);
 std::string FormatScript(const CScript& script);
 std::string EncodeHexTx(const CTransaction& tx, const int serializeFlags = 0);
 std::string SighashToStr(unsigned char sighash_type);

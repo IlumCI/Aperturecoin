@@ -4,6 +4,7 @@
 
 #include <consensus/tx_check.h>
 
+#include <primitives/token.h>
 #include <primitives/transaction.h>
 #include <consensus/validation.h>
 
@@ -32,6 +33,17 @@ bool CheckTransaction(const CTransaction& tx, TxValidationState& state)
         nValueOut += txout.nValue;
         if (!MoneyRange(nValueOut))
             return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-txouttotal-toolarge");
+
+        // Native tokens: a token prefix must be well formed, and coinbase
+        // outputs cannot carry tokens.
+        if (token::HasTokenPrefix(txout.scriptPubKey)) {
+            token::TokenData token_data;
+            std::string error;
+            if (token::Parse(txout.scriptPubKey, token_data, nullptr, &error) != token::ParseResult::OK)
+                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-token-prefix", error);
+            if (tx.IsCoinBase())
+                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-coinbase-token");
+        }
     }
 
     // Check for duplicate inputs (see CVE-2018-17144)

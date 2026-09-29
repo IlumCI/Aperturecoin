@@ -5,6 +5,8 @@
 
 #include <script/interpreter.h>
 
+#include <primitives/token.h>
+
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
@@ -1936,6 +1938,16 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
 
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, unsigned int flags, const BaseSignatureChecker& checker, ScriptError* serror)
 {
+    // ApertureCoin: a native token prefix (primitives/token.h) is not part of
+    // the locking bytecode; evaluate the script that follows it.
+    if (token::HasTokenPrefix(scriptPubKey)) {
+        const CScript locking_bytecode{token::GetLockingBytecode(scriptPubKey)};
+        if (!token::HasTokenPrefix(locking_bytecode)) {
+            return VerifyScript(scriptSig, locking_bytecode, witness, flags, checker, serror);
+        }
+        // Invalid prefix: fall through; 0xef is not a valid opcode.
+    }
+
     static const CScriptWitness emptyWitness;
     if (witness == nullptr) {
         witness = &emptyWitness;

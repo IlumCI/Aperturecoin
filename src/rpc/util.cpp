@@ -5,6 +5,9 @@
 #include <key_io.h>
 #include <outputtype.h>
 #include <rpc/util.h>
+
+#include <primitives/token.h>
+#include <util/strencodings.h>
 #include <script/descriptor.h>
 #include <script/signingprovider.h>
 #include <tinyformat.h>
@@ -84,6 +87,45 @@ CAmount AmountFromValue(const UniValue& value)
     if (!MoneyRange(amount))
         throw JSONRPCError(RPC_TYPE_ERROR, "Amount out of range");
     return amount;
+}
+
+token::TokenData ParseTokenData(const UniValue& value)
+{
+    if (!value.isObject()) throw JSONRPCError(RPC_INVALID_PARAMETER, "token must be an object");
+    RPCTypeCheckObj(value,
+        {
+            {"category", UniValueType(UniValue::VSTR)},
+            {"amount", UniValueType()},
+            {"nft", UniValueType(UniValue::VOBJ)},
+        },
+        /* fAllowNull */ true, /* fStrict */ true);
+    token::TokenData token_data;
+    token_data.category = ParseHashO(value, "category");
+    const UniValue& amount = find_value(value, "amount");
+    if (!amount.isNull()) {
+        int64_t parsed;
+        if (!(amount.isNum() || amount.isStr()) || !ParseInt64(amount.getValStr(), &parsed) || parsed < 0) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "token amount must be a non-negative integer");
+        }
+        token_data.amount = parsed;
+    }
+    const UniValue& nft = find_value(value, "nft");
+    if (!nft.isNull()) {
+        RPCTypeCheckObj(nft, {{"capability", UniValueType(UniValue::VSTR)}, {"commitment", UniValueType(UniValue::VSTR)}}, true, true);
+        token::NFT parsed_nft;
+        const UniValue& capability = find_value(nft, "capability");
+        if (!capability.isNull()) {
+            const auto cap = token::CapabilityFromString(capability.get_str());
+            if (!cap) throw JSONRPCError(RPC_INVALID_PARAMETER, "nft capability must be none, mutable or minting");
+            parsed_nft.capability = *cap;
+        }
+        const UniValue& commitment = find_value(nft, "commitment");
+        if (!commitment.isNull()) parsed_nft.commitment = ParseHexV(commitment, "commitment");
+        token_data.nft = parsed_nft;
+    }
+    std::string error;
+    if (!token::IsValid(token_data, &error)) throw JSONRPCError(RPC_INVALID_PARAMETER, "invalid token data: " + error);
+    return token_data;
 }
 
 uint256 ParseHashV(const UniValue& v, std::string strName)
