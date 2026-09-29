@@ -1649,8 +1649,13 @@ void PrecomputedTransactionData::Init(const T& txTo, std::vector<CTxOut>&& spent
     bool uses_bip341_taproot = false;
     for (size_t inpos = 0; inpos < txTo.vin.size(); ++inpos) {
         if (!txTo.vin[inpos].scriptWitness.IsNull()) {
-            if (m_spent_outputs_ready && m_spent_outputs[inpos].scriptPubKey.size() == 2 + WITNESS_V1_TAPROOT_SIZE &&
-                m_spent_outputs[inpos].scriptPubKey[0] == OP_1) {
+            // ApertureCoin: classify by the locking bytecode behind any native
+            // token prefix, exactly as VerifyScript evaluates it. Otherwise a
+            // token-carrying Taproot spend would reach SignatureHashSchnorr
+            // without the BIP341 precomputation.
+            const CScript locking_bytecode{m_spent_outputs_ready ? token::GetLockingBytecode(m_spent_outputs[inpos].scriptPubKey) : CScript()};
+            if (m_spent_outputs_ready && locking_bytecode.size() == 2 + WITNESS_V1_TAPROOT_SIZE &&
+                locking_bytecode[0] == OP_1) {
                 // Treat every witness-bearing spend with 34-byte scriptPubKey that starts with OP_1 as a Taproot
                 // spend. This only works if spent_outputs was provided as well, but if it wasn't, actual validation
                 // will fail anyway. Note that this branch may trigger for scriptPubKeys that aren't actually segwit

@@ -95,4 +95,19 @@ BOOST_AUTO_TEST_CASE(solver_and_verify_strip_prefix)
     BOOST_CHECK(!VerifyScript(CScript(), CScript(bad.begin(), bad.end()), nullptr, SCRIPT_VERIFY_P2SH, BaseSignatureChecker(), &err));
 }
 
+BOOST_AUTO_TEST_CASE(taproot_precompute_sees_through_prefix)
+{
+    // Regression: a token-carrying P2TR output must trigger the BIP341
+    // precomputation, otherwise a Schnorr signature check would assert.
+    token::TokenData td{Category(), std::nullopt, 5};
+    const CScript p2tr{CScript() << OP_1 << std::vector<unsigned char>(32, 0x02)};
+    CMutableTransaction tx;
+    tx.vin.resize(1);
+    tx.vin[0].scriptWitness.stack.push_back(std::vector<unsigned char>(64, 0x01));
+    tx.vout.emplace_back(1000, CScript() << OP_TRUE);
+    PrecomputedTransactionData txdata;
+    txdata.Init(tx, {CTxOut(2000, token::Encode(td, p2tr))});
+    BOOST_CHECK(txdata.m_bip341_taproot_ready);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
