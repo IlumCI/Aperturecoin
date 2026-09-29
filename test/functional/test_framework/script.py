@@ -251,6 +251,28 @@ OP_NOP10 = CScriptOp(0xb9)
 # BIP 342 opcodes (Tapscript)
 OP_CHECKSIGADD = CScriptOp(0xba)
 
+# ApertureCoin tapscript extensions
+OP_CHECKTEMPLATEVERIFY = CScriptOp(0xb3)
+OP_INPUTINDEX = CScriptOp(0xc0)
+OP_ACTIVEBYTECODE = CScriptOp(0xc1)
+OP_TXVERSION = CScriptOp(0xc2)
+OP_TXINPUTCOUNT = CScriptOp(0xc3)
+OP_TXOUTPUTCOUNT = CScriptOp(0xc4)
+OP_TXLOCKTIME = CScriptOp(0xc5)
+OP_UTXOVALUE = CScriptOp(0xc6)
+OP_UTXOBYTECODE = CScriptOp(0xc7)
+OP_OUTPOINTTXHASH = CScriptOp(0xc8)
+OP_OUTPOINTINDEX = CScriptOp(0xc9)
+OP_INPUTSEQUENCENUMBER = CScriptOp(0xcb)
+OP_OUTPUTVALUE = CScriptOp(0xcc)
+OP_OUTPUTBYTECODE = CScriptOp(0xcd)
+OP_UTXOTOKENCATEGORY = CScriptOp(0xce)
+OP_UTXOTOKENCOMMITMENT = CScriptOp(0xcf)
+OP_UTXOTOKENAMOUNT = CScriptOp(0xd0)
+OP_OUTPUTTOKENCATEGORY = CScriptOp(0xd1)
+OP_OUTPUTTOKENCOMMITMENT = CScriptOp(0xd2)
+OP_OUTPUTTOKENAMOUNT = CScriptOp(0xd3)
+
 OP_INVALIDOPCODE = CScriptOp(0xff)
 
 OPCODE_NAMES.update({
@@ -849,5 +871,10 @@ def taproot_construct(pubkey, scripts=None):
     leaves = dict((name, TaprootLeafInfo(script, version, merklebranch)) for name, version, script, merklebranch in ret)
     return TaprootInfo(CScript([OP_1, tweaked]), pubkey, negated + 0, tweak, leaves)
 
+APERTURE_TAPSCRIPT_OPCODES = {0x7e, 0x95, 0x96, 0x97} | set(range(0xc0, 0xca)) | set(range(0xcb, 0xd4))
+
+
 def is_op_success(o):
+    if o in APERTURE_TAPSCRIPT_OPCODES:
+        return False
     return o == 0x50 or o == 0x62 or o == 0x89 or o == 0x8a or o == 0x8d or o == 0x8e or (o >= 0x7e and o <= 0x81) or (o >= 0x83 and o <= 0x86) or (o >= 0x95 and o <= 0x99) or (o >= 0xbb and o <= 0xfe)

@@ -7,6 +7,8 @@
 
 #include <primitives/token.h>
 
+#include <limits>
+
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
@@ -344,6 +346,25 @@ public:
 };
 }
 
+uint256 ComputeStandardTemplateHash(const ScriptIntrospection& ctx)
+{
+    // BIP119 DefaultCheckTemplateVerifyHash.
+    bool any_scriptsig{false};
+    CHashWriter scriptsigs(SER_GETHASH, 0), sequences(SER_GETHASH, 0), outputs(SER_GETHASH, 0);
+    for (const CTxIn& in : *ctx.vin) {
+        if (!in.scriptSig.empty()) any_scriptsig = true;
+        scriptsigs << in.scriptSig;
+        sequences << in.nSequence;
+    }
+    for (const CTxOut& out : *ctx.vout) outputs << out;
+    CHashWriter h(SER_GETHASH, 0);
+    h << ctx.version << ctx.locktime;
+    if (any_scriptsig) h << scriptsigs.GetSHA256();
+    h << (uint32_t)ctx.vin->size() << sequences.GetSHA256() << (uint32_t)ctx.vout->size() << outputs.GetSHA256()
+      << (uint32_t)ctx.input_index;
+    return h.GetSHA256();
+}
+
 static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPubKey, CScript::const_iterator pbegincodehash, CScript::const_iterator pend, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& fSuccess)
 {
     assert(sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0);
@@ -456,6 +477,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     }
     int nOpCount = 0;
     bool fRequireMinimal = (flags & SCRIPT_VERIFY_MINIMALDATA) != 0;
+    // ApertureCoin: tapscript arithmetic operates on 8-byte numbers.
+    const size_t nNumSize = sigversion == SigVersion::TAPSCRIPT ? 8 : CScriptNum::nDefaultMaxNumSize;
+    ScriptIntrospection introspection;
+    const bool has_introspection = checker.GetIntrospection(introspection);
     uint32_t opcode_pos = 0;
     execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
     execdata.m_codeseparator_pos_init = true;
@@ -480,7 +505,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 }
             }
 
-            if (opcode == OP_CAT ||
+            // ApertureCoin: OP_CAT, OP_MUL, OP_DIV and OP_MOD are enabled in tapscript.
+            if (sigversion == SigVersion::TAPSCRIPT && IsApertureTapscriptOpcode(opcode)) {
+                // handled below
+            } else if (opcode == OP_CAT ||
                 opcode == OP_SUBSTR ||
                 opcode == OP_LEFT ||
                 opcode == OP_RIGHT ||
@@ -618,7 +646,31 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     break;
                 }
 
-                case OP_NOP1: case OP_NOP4: case OP_NOP5:
+                case OP_CHECKTEMPLATEVERIFY:
+                {
+                    // ApertureCoin: BIP119 in tapscript only; elsewhere OP_NOP4 remains a NOP.
+                    if (sigversion != SigVersion::TAPSCRIPT) {
+                        if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS)
+                            return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS);
+                        break;
+                    }
+                    // <hash> OP_CHECKTEMPLATEVERIFY. Other argument sizes are upgradable NOPs.
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const valtype& hash = stacktop(-1);
+                    if (hash.size() == 32) {
+                        if (!has_introspection) return set_error(serror, SCRIPT_ERR_CONTEXT_NOT_PRESENT);
+                        const uint256 expected{ComputeStandardTemplateHash(introspection)};
+                        if (!std::equal(hash.begin(), hash.end(), expected.begin())) {
+                            return set_error(serror, SCRIPT_ERR_TEMPLATE_MISMATCH);
+                        }
+                    } else if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS) {
+                        return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS);
+                    }
+                    break;
+                }
+
+                case OP_NOP1: case OP_NOP5:
                 case OP_NOP6: case OP_NOP7: case OP_NOP8: case OP_NOP9: case OP_NOP10:
                 {
                     if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS)
@@ -940,6 +992,156 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
 
 
                 //
+                // ApertureCoin tapscript extensions (only reachable in tapscript;
+                // elsewhere these opcodes are disabled or OP_SUCCESS)
+                //
+                case OP_CAT:
+                {
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    valtype& vch1 = stacktop(-2);
+                    const valtype& vch2 = stacktop(-1);
+                    if (vch1.size() + vch2.size() > MAX_SCRIPT_ELEMENT_SIZE)
+                        return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
+                    vch1.insert(vch1.end(), vch2.begin(), vch2.end());
+                    popstack(stack);
+                }
+                break;
+
+                case OP_MUL:
+                case OP_DIV:
+                case OP_MOD:
+                {
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const int64_t a = CScriptNum(stacktop(-2), fRequireMinimal, nNumSize).GetInt64();
+                    const int64_t b = CScriptNum(stacktop(-1), fRequireMinimal, nNumSize).GetInt64();
+                    int64_t result;
+                    if (opcode == OP_MUL) {
+                        if (__builtin_mul_overflow(a, b, &result) || result == std::numeric_limits<int64_t>::min())
+                            return set_error(serror, SCRIPT_ERR_NUMBER_OVERFLOW);
+                    } else {
+                        if (b == 0) return set_error(serror, SCRIPT_ERR_DIV_BY_ZERO);
+                        // Truncating division; operands exclude INT64_MIN so no overflow.
+                        result = opcode == OP_DIV ? a / b : a % b;
+                    }
+                    popstack(stack);
+                    popstack(stack);
+                    stack.push_back(CScriptNum(result).getvch());
+                }
+                break;
+
+                case OP_INPUTINDEX:
+                case OP_ACTIVEBYTECODE:
+                case OP_TXVERSION:
+                case OP_TXINPUTCOUNT:
+                case OP_TXOUTPUTCOUNT:
+                case OP_TXLOCKTIME:
+                {
+                    if (sigversion != SigVersion::TAPSCRIPT) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+                    if (!has_introspection) return set_error(serror, SCRIPT_ERR_CONTEXT_NOT_PRESENT);
+                    switch (opcode) {
+                    case OP_INPUTINDEX: stack.push_back(CScriptNum(introspection.input_index).getvch()); break;
+                    case OP_ACTIVEBYTECODE: stack.push_back(valtype(pbegincodehash, pend)); break;
+                    case OP_TXVERSION: stack.push_back(CScriptNum(introspection.version).getvch()); break;
+                    case OP_TXINPUTCOUNT: stack.push_back(CScriptNum((int64_t)introspection.vin->size()).getvch()); break;
+                    case OP_TXOUTPUTCOUNT: stack.push_back(CScriptNum((int64_t)introspection.vout->size()).getvch()); break;
+                    case OP_TXLOCKTIME: stack.push_back(CScriptNum((int64_t)introspection.locktime).getvch()); break;
+                    default: assert(!"invalid opcode");
+                    }
+                    if (stack.back().size() > MAX_SCRIPT_ELEMENT_SIZE)
+                        return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
+                }
+                break;
+
+                case OP_UTXOVALUE:
+                case OP_UTXOBYTECODE:
+                case OP_OUTPOINTTXHASH:
+                case OP_OUTPOINTINDEX:
+                case OP_INPUTSEQUENCENUMBER:
+                case OP_OUTPUTVALUE:
+                case OP_OUTPUTBYTECODE:
+                case OP_UTXOTOKENCATEGORY:
+                case OP_UTXOTOKENCOMMITMENT:
+                case OP_UTXOTOKENAMOUNT:
+                case OP_OUTPUTTOKENCATEGORY:
+                case OP_OUTPUTTOKENCOMMITMENT:
+                case OP_OUTPUTTOKENAMOUNT:
+                {
+                    // (index -- value)
+                    if (sigversion != SigVersion::TAPSCRIPT) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    if (!has_introspection) return set_error(serror, SCRIPT_ERR_CONTEXT_NOT_PRESENT);
+                    const int64_t index = CScriptNum(stacktop(-1), fRequireMinimal).GetInt64();
+                    const bool is_output = opcode == OP_OUTPUTVALUE || opcode == OP_OUTPUTBYTECODE ||
+                                           opcode == OP_OUTPUTTOKENCATEGORY || opcode == OP_OUTPUTTOKENCOMMITMENT ||
+                                           opcode == OP_OUTPUTTOKENAMOUNT;
+                    const bool needs_utxo = opcode == OP_UTXOVALUE || opcode == OP_UTXOBYTECODE ||
+                                            opcode == OP_UTXOTOKENCATEGORY || opcode == OP_UTXOTOKENCOMMITMENT ||
+                                            opcode == OP_UTXOTOKENAMOUNT;
+                    const size_t count = is_output ? introspection.vout->size() : introspection.vin->size();
+                    if (index < 0 || (uint64_t)index >= count)
+                        return set_error(serror, SCRIPT_ERR_INVALID_TX_INDEX);
+                    if (needs_utxo && (!introspection.spent_outputs || introspection.spent_outputs->size() != introspection.vin->size()))
+                        return set_error(serror, SCRIPT_ERR_CONTEXT_NOT_PRESENT);
+                    const CTxOut* txout = is_output ? &(*introspection.vout)[index]
+                                                    : needs_utxo ? &(*introspection.spent_outputs)[index] : nullptr;
+                    valtype result;
+                    token::TokenData token_data;
+                    const bool has_token = txout && token::Parse(txout->scriptPubKey, token_data) == token::ParseResult::OK;
+                    switch (opcode) {
+                    case OP_UTXOVALUE:
+                    case OP_OUTPUTVALUE:
+                        result = CScriptNum(txout->nValue).getvch();
+                        break;
+                    case OP_UTXOBYTECODE:
+                    case OP_OUTPUTBYTECODE:
+                    {
+                        const CScript locking{token::GetLockingBytecode(txout->scriptPubKey)};
+                        result.assign(locking.begin(), locking.end());
+                        break;
+                    }
+                    case OP_OUTPOINTTXHASH:
+                    {
+                        const uint256& hash = (*introspection.vin)[index].prevout.hash;
+                        result.assign(hash.begin(), hash.end());
+                        break;
+                    }
+                    case OP_OUTPOINTINDEX:
+                        result = CScriptNum((int64_t)(*introspection.vin)[index].prevout.n).getvch();
+                        break;
+                    case OP_INPUTSEQUENCENUMBER:
+                        result = CScriptNum((int64_t)(*introspection.vin)[index].nSequence).getvch();
+                        break;
+                    case OP_UTXOTOKENCATEGORY:
+                    case OP_OUTPUTTOKENCATEGORY:
+                        if (has_token) {
+                            result.assign(token_data.category.begin(), token_data.category.end());
+                            if (token_data.nft && token_data.nft->capability != token::Capability::NONE) {
+                                result.push_back(static_cast<unsigned char>(token_data.nft->capability));
+                            }
+                        }
+                        break;
+                    case OP_UTXOTOKENCOMMITMENT:
+                    case OP_OUTPUTTOKENCOMMITMENT:
+                        if (has_token && token_data.nft) result = token_data.nft->commitment;
+                        break;
+                    case OP_UTXOTOKENAMOUNT:
+                    case OP_OUTPUTTOKENAMOUNT:
+                        result = CScriptNum(has_token ? token_data.amount : 0).getvch();
+                        break;
+                    default:
+                        assert(!"invalid opcode");
+                    }
+                    if (result.size() > MAX_SCRIPT_ELEMENT_SIZE)
+                        return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
+                    popstack(stack);
+                    stack.push_back(std::move(result));
+                }
+                break;
+
+                //
                 // Numeric
                 //
                 case OP_1ADD:
@@ -952,7 +1154,11 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (in -- out)
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    CScriptNum bn(stacktop(-1), fRequireMinimal);
+                    CScriptNum bn(stacktop(-1), fRequireMinimal, nNumSize);
+                    if ((opcode == OP_1ADD && bn.GetInt64() == std::numeric_limits<int64_t>::max()) ||
+                        (opcode == OP_1SUB && bn.GetInt64() == std::numeric_limits<int64_t>::min() + 1)) {
+                        return set_error(serror, SCRIPT_ERR_NUMBER_OVERFLOW);
+                    }
                     switch (opcode)
                     {
                     case OP_1ADD:       bn += bnOne; break;
@@ -985,18 +1191,24 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (x1 x2 -- out)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    CScriptNum bn1(stacktop(-2), fRequireMinimal);
-                    CScriptNum bn2(stacktop(-1), fRequireMinimal);
+                    CScriptNum bn1(stacktop(-2), fRequireMinimal, nNumSize);
+                    CScriptNum bn2(stacktop(-1), fRequireMinimal, nNumSize);
                     CScriptNum bn(0);
                     switch (opcode)
                     {
                     case OP_ADD:
-                        bn = bn1 + bn2;
-                        break;
-
                     case OP_SUB:
-                        bn = bn1 - bn2;
+                    {
+                        // 8-byte script numbers lie in [-(2^63-1), 2^63-1].
+                        int64_t result;
+                        const bool overflow = opcode == OP_ADD ? __builtin_add_overflow(bn1.GetInt64(), bn2.GetInt64(), &result)
+                                                               : __builtin_sub_overflow(bn1.GetInt64(), bn2.GetInt64(), &result);
+                        if (overflow || result == std::numeric_limits<int64_t>::min()) {
+                            return set_error(serror, SCRIPT_ERR_NUMBER_OVERFLOW);
+                        }
+                        bn = CScriptNum(result);
                         break;
+                    }
 
                     case OP_BOOLAND:             bn = (bn1 != bnZero && bn2 != bnZero); break;
                     case OP_BOOLOR:              bn = (bn1 != bnZero || bn2 != bnZero); break;
@@ -1030,9 +1242,9 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (x min max -- out)
                     if (stack.size() < 3)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    CScriptNum bn1(stacktop(-3), fRequireMinimal);
-                    CScriptNum bn2(stacktop(-2), fRequireMinimal);
-                    CScriptNum bn3(stacktop(-1), fRequireMinimal);
+                    CScriptNum bn1(stacktop(-3), fRequireMinimal, nNumSize);
+                    CScriptNum bn2(stacktop(-2), fRequireMinimal, nNumSize);
+                    CScriptNum bn3(stacktop(-1), fRequireMinimal, nNumSize);
                     bool fValue = (bn2 <= bn1 && bn1 < bn3);
                     popstack(stack);
                     popstack(stack);

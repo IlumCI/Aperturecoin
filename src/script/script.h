@@ -214,11 +214,39 @@ enum opcodetype
     // Opcode added by BIP 342 (Tapscript)
     OP_CHECKSIGADD = 0xba,
 
+    // ApertureCoin: BIP119 (all script versions)
+    OP_CHECKTEMPLATEVERIFY = OP_NOP4,
+
+    // ApertureCoin: transaction and token introspection (tapscript only;
+    // values follow Bitcoin Cash CHIP-2021-02 / CHIP-2022-02)
+    OP_INPUTINDEX = 0xc0,
+    OP_ACTIVEBYTECODE = 0xc1,
+    OP_TXVERSION = 0xc2,
+    OP_TXINPUTCOUNT = 0xc3,
+    OP_TXOUTPUTCOUNT = 0xc4,
+    OP_TXLOCKTIME = 0xc5,
+    OP_UTXOVALUE = 0xc6,
+    OP_UTXOBYTECODE = 0xc7,
+    OP_OUTPOINTTXHASH = 0xc8,
+    OP_OUTPOINTINDEX = 0xc9,
+    OP_INPUTSEQUENCENUMBER = 0xcb,
+    OP_OUTPUTVALUE = 0xcc,
+    OP_OUTPUTBYTECODE = 0xcd,
+    OP_UTXOTOKENCATEGORY = 0xce,
+    OP_UTXOTOKENCOMMITMENT = 0xcf,
+    OP_UTXOTOKENAMOUNT = 0xd0,
+    OP_OUTPUTTOKENCATEGORY = 0xd1,
+    OP_OUTPUTTOKENCOMMITMENT = 0xd2,
+    OP_OUTPUTTOKENAMOUNT = 0xd3,
+
     OP_INVALIDOPCODE = 0xff,
 };
 
 // Maximum value that an opcode can be
-static const unsigned int MAX_OPCODE = OP_NOP10;
+static const unsigned int MAX_OPCODE = OP_OUTPUTTOKENAMOUNT;
+
+/** ApertureCoin: opcodes (re)defined in tapscript that would otherwise be OP_SUCCESSx. */
+bool IsApertureTapscriptOpcode(opcodetype opcode);
 
 std::string GetOpName(opcodetype opcode);
 
@@ -334,6 +362,8 @@ public:
         m_value &= rhs;
         return *this;
     }
+
+    int64_t GetInt64() const { return m_value; }
 
     int getint() const
     {

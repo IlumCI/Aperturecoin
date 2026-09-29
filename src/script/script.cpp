@@ -144,6 +144,27 @@ std::string GetOpName(opcodetype opcode)
     // Opcode added by BIP 342 (Tapscript)
     case OP_CHECKSIGADD            : return "OP_CHECKSIGADD";
 
+    // ApertureCoin introspection (tapscript)
+    case OP_INPUTINDEX             : return "OP_INPUTINDEX";
+    case OP_ACTIVEBYTECODE         : return "OP_ACTIVEBYTECODE";
+    case OP_TXVERSION              : return "OP_TXVERSION";
+    case OP_TXINPUTCOUNT           : return "OP_TXINPUTCOUNT";
+    case OP_TXOUTPUTCOUNT          : return "OP_TXOUTPUTCOUNT";
+    case OP_TXLOCKTIME             : return "OP_TXLOCKTIME";
+    case OP_UTXOVALUE              : return "OP_UTXOVALUE";
+    case OP_UTXOBYTECODE           : return "OP_UTXOBYTECODE";
+    case OP_OUTPOINTTXHASH         : return "OP_OUTPOINTTXHASH";
+    case OP_OUTPOINTINDEX          : return "OP_OUTPOINTINDEX";
+    case OP_INPUTSEQUENCENUMBER    : return "OP_INPUTSEQUENCENUMBER";
+    case OP_OUTPUTVALUE            : return "OP_OUTPUTVALUE";
+    case OP_OUTPUTBYTECODE         : return "OP_OUTPUTBYTECODE";
+    case OP_UTXOTOKENCATEGORY      : return "OP_UTXOTOKENCATEGORY";
+    case OP_UTXOTOKENCOMMITMENT    : return "OP_UTXOTOKENCOMMITMENT";
+    case OP_UTXOTOKENAMOUNT        : return "OP_UTXOTOKENAMOUNT";
+    case OP_OUTPUTTOKENCATEGORY    : return "OP_OUTPUTTOKENCATEGORY";
+    case OP_OUTPUTTOKENCOMMITMENT  : return "OP_OUTPUTTOKENCOMMITMENT";
+    case OP_OUTPUTTOKENAMOUNT      : return "OP_OUTPUTTOKENAMOUNT";
+
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 
     default:
@@ -367,8 +388,16 @@ bool GetScriptOp(CScriptBase::const_iterator& pc, CScriptBase::const_iterator en
     return true;
 }
 
+bool IsApertureTapscriptOpcode(opcodetype opcode)
+{
+    return opcode == OP_CAT || opcode == OP_MUL || opcode == OP_DIV || opcode == OP_MOD ||
+           (opcode >= OP_INPUTINDEX && opcode <= OP_OUTPOINTINDEX) ||
+           (opcode >= OP_INPUTSEQUENCENUMBER && opcode <= OP_OUTPUTTOKENAMOUNT);
+}
+
 bool IsOpSuccess(const opcodetype& opcode)
 {
+    if (IsApertureTapscriptOpcode(opcode)) return false;
     return opcode == 80 || opcode == 98 || (opcode >= 126 && opcode <= 129) ||
            (opcode >= 131 && opcode <= 134) || (opcode >= 137 && opcode <= 138) ||
            (opcode >= 141 && opcode <= 142) || (opcode >= 149 && opcode <= 153) ||

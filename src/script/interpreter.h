@@ -221,9 +221,29 @@ static constexpr size_t TAPROOT_CONTROL_MAX_SIZE = TAPROOT_CONTROL_BASE_SIZE + T
 template <class T>
 uint256 SignatureHash(const CScript& scriptCode, const T& txTo, unsigned int nIn, int nHashType, const CAmount& amount, SigVersion sigversion, const PrecomputedTransactionData* cache = nullptr);
 
+/** ApertureCoin: read-only view of the spending transaction for introspection opcodes. */
+struct ScriptIntrospection {
+    int32_t version{0};
+    uint32_t locktime{0};
+    unsigned int input_index{0};
+    const std::vector<CTxIn>* vin{nullptr};
+    const std::vector<CTxOut>* vout{nullptr};
+    //! Outputs spent by vin, in order; null when not available.
+    const std::vector<CTxOut>* spent_outputs{nullptr};
+};
+
+/** BIP119 standard template hash for input nIn. */
+uint256 ComputeStandardTemplateHash(const ScriptIntrospection& ctx);
+
 class BaseSignatureChecker
 {
 public:
+    /** Fill ctx with the spending transaction; false when there is none. */
+    virtual bool GetIntrospection(ScriptIntrospection& ctx) const
+    {
+        return false;
+    }
+
     virtual bool CheckECDSASignature(const std::vector<unsigned char>& scriptSig, const std::vector<unsigned char>& vchPubKey, const CScript& scriptCode, SigVersion sigversion) const
     {
         return false;
@@ -267,6 +287,17 @@ public:
     bool CheckSchnorrSignature(Span<const unsigned char> sig, Span<const unsigned char> pubkey, SigVersion sigversion, const ScriptExecutionData& execdata, ScriptError* serror = nullptr) const override;
     bool CheckLockTime(const CScriptNum& nLockTime) const override;
     bool CheckSequence(const CScriptNum& nSequence) const override;
+    bool GetIntrospection(ScriptIntrospection& ctx) const override
+    {
+        if (!txTo) return false;
+        ctx.version = txTo->nVersion;
+        ctx.locktime = txTo->nLockTime;
+        ctx.input_index = nIn;
+        ctx.vin = &txTo->vin;
+        ctx.vout = &txTo->vout;
+        ctx.spent_outputs = (txdata && txdata->m_spent_outputs_ready) ? &txdata->m_spent_outputs : nullptr;
+        return true;
+    }
 };
 
 using TransactionSignatureChecker = GenericTransactionSignatureChecker<CTransaction>;
@@ -294,6 +325,11 @@ public:
     {
         return m_checker.CheckLockTime(nLockTime);
     }
+    bool GetIntrospection(ScriptIntrospection& ctx) const override
+    {
+        return m_checker.GetIntrospection(ctx);
+    }
+
     bool CheckSequence(const CScriptNum& nSequence) const override
     {
         return m_checker.CheckSequence(nSequence);

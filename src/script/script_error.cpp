@@ -115,6 +115,16 @@ std::string ScriptErrorString(const ScriptError serror)
             return "Using OP_CODESEPARATOR in non-witness script";
         case SCRIPT_ERR_SIG_FINDANDDELETE:
             return "Signature is found in scriptCode";
+        case SCRIPT_ERR_CONTEXT_NOT_PRESENT:
+            return "Introspection requires transaction context";
+        case SCRIPT_ERR_INVALID_TX_INDEX:
+            return "Introspection index out of range";
+        case SCRIPT_ERR_TEMPLATE_MISMATCH:
+            return "OP_CHECKTEMPLATEVERIFY template hash mismatch";
+        case SCRIPT_ERR_DIV_BY_ZERO:
+            return "Division or modulo by zero";
+        case SCRIPT_ERR_NUMBER_OVERFLOW:
+            return "Arithmetic result out of 64-bit range";
         case SCRIPT_ERR_UNKNOWN_ERROR:
         case SCRIPT_ERR_ERROR_COUNT:
         default: break;
