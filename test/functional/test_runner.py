@@ -226,6 +226,7 @@ BASE_SCRIPTS = [
     'feature_tokens.py',
     'wallet_tokens.py',
     'feature_covenants.py',
+    'feature_mandate.py',
     'feature_nulldummy.py --descriptors',
     'mempool_accept.py',
     'mempool_expiry.py',
