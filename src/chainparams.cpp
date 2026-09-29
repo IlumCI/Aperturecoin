@@ -254,7 +254,7 @@ public:
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,111);
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,196);
-        base58Prefixes[SCRIPT_ADDRESS2] = std::vector<unsigned char>(1,196);
+        base58Prefixes[SCRIPT_ADDRESS2] = std::vector<unsigned char>(1,58);
         base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,239);
         base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x35, 0x87, 0xCF};
         base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
@@ -343,9 +343,9 @@ public:
 
         UpdateActivationParametersFromArgs(args);
 
-        genesis = CreateGenesisBlock(1790640002, 0, 0x207fffff, 1, 50 * COIN);
+        genesis = CreateGenesisBlock(1296688602, 2, 0x207fffff, 1, 50 * COIN);
         consensus.hashGenesisBlock = genesis.GetHash();
-        assert(consensus.hashGenesisBlock == uint256S("0xdbd86b51786987d0d6bb8f917bd8fbafa82ffa46264782d20d7df8c6195e49e7"));
+        assert(consensus.hashGenesisBlock == uint256S("0x024281fa7509233ccc032a09dddd410f5538d19e572101280c7f1a2577ea42dd"));
         assert(genesis.hashMerkleRoot == uint256S("0x96d0d20442ee84e71f6b072b9c141f93503ded31e9249ae020cc8c497d8ec718"));
 
         vFixedSeeds.clear(); //!< Regtest mode doesn't have any fixed seeds.
@@ -358,7 +358,7 @@ public:
 
         checkpointData = {
             {
-                {0, uint256S("dbd86b51786987d0d6bb8f917bd8fbafa82ffa46264782d20d7df8c6195e49e7")},
+                {0, uint256S("024281fa7509233ccc032a09dddd410f5538d19e572101280c7f1a2577ea42dd")},
             }
         };
 
@@ -370,7 +370,7 @@ public:
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,111);
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,196);
-        base58Prefixes[SCRIPT_ADDRESS2] = std::vector<unsigned char>(1,196);
+        base58Prefixes[SCRIPT_ADDRESS2] = std::vector<unsigned char>(1,58);
         base58Prefixes[SECRET_KEY] =     std::vector<unsigned char>(1,239);
         base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x35, 0x87, 0xCF};
         base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
