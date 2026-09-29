@@ -21,7 +21,7 @@ Chain parameters
 | Difficulty         | ASERT (aserti3-2d), per block, 2-day half-life, anchored at block 1      |
 | Block subsidy      | 50 SCIENCE, halving every 1,051,200 blocks (~4 years)                    |
 | Supply cap         | ~105,120,000 SCIENCE                                                     |
-| Development fund   | 5% of the subsidy until the first halving, enforced by consensus         |
+| Development fund   | 1.5% of the subsidy until the first halving, enforced by consensus       |
 | Soft forks         | P2SH, BIP34/65/66, CSV, SegWit, Taproot enforced from genesis            |
 | MWEB               | disabled (the code is dormant; it stays active on regtest for coverage)  |
 | Addresses          | `sci1...` (bech32/bech32m), `A...` (P2PKH), `a...` (P2SH)                |

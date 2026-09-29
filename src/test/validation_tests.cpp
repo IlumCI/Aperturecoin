@@ -64,15 +64,15 @@ BOOST_AUTO_TEST_CASE(devfund_amount_test)
     const auto chainParams = CreateChainParams(*m_node.args, CBaseChainParams::MAIN);
     const Consensus::Params& params = chainParams->GetConsensus();
     BOOST_CHECK_EQUAL(GetDevFundAmount(0, params), 0);
-    BOOST_CHECK_EQUAL(GetDevFundAmount(1, params), 50 * COIN * 5 / 100);
-    BOOST_CHECK_EQUAL(GetDevFundAmount(params.nDevFundEndHeight - 1, params), 50 * COIN * 5 / 100);
+    BOOST_CHECK_EQUAL(GetDevFundAmount(1, params), 75 * COIN / 100);
+    BOOST_CHECK_EQUAL(GetDevFundAmount(params.nDevFundEndHeight - 1, params), 75 * COIN / 100);
     BOOST_CHECK_EQUAL(GetDevFundAmount(params.nDevFundEndHeight, params), 0);
     CAmount nSum = 0;
     for (int nHeight = 0; nHeight < params.nDevFundEndHeight; nHeight += 1200) {
         nSum += GetDevFundAmount(nHeight == 0 ? 1 : nHeight, params) * 1200;
     }
-    // 5% of the first halving era: 1,051,200 blocks * 2.5 SCIENCE.
-    BOOST_CHECK_EQUAL(nSum, CAmount{2628000} * COIN);
+    // 1.5% of the first halving era: 1,051,200 blocks * 0.75 SCIENCE.
+    BOOST_CHECK_EQUAL(nSum, CAmount{788400} * COIN);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

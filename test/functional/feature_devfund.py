@@ -82,7 +82,7 @@ class DevFundTest(BitcoinTestFramework):
         tmpl = node.getblocktemplate(NORMAL_GBT_REQUEST_PARAMS)
         assert_equal(tmpl["height"], 151)
         assert_equal(tmpl["devfund"]["amount"], devfund_amount(151))
-        assert_equal(devfund_amount(151), 25 * 10**8 * 5 // 100)
+        assert_equal(devfund_amount(151), 25 * 10**8 * 150 // 10000)
 
         self.log.info("The requirement ends at -devfundendheight")
         node.generatetoaddress(DEVFUND_END_HEIGHT - 1 - node.getblockcount(), address)

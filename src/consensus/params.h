@@ -96,11 +96,11 @@ struct Params {
     unsigned int nMatMulDim;
     /**
      * Development fund: every coinbase below nDevFundEndHeight must pay at
-     * least nDevFundPercent percent of the block subsidy (fees excluded) to
+     * least nDevFundBasisPoints / 10000 of the block subsidy (fees excluded) to
      * devFundScript.
      */
     std::vector<uint8_t> devFundScript;
-    int nDevFundPercent{0};
+    int nDevFundBasisPoints{0};
     int nDevFundEndHeight{0};
     /** The best chain should have at least this much work */
     uint256 nMinimumChainWork;

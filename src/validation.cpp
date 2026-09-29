@@ -1296,11 +1296,11 @@ CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
 
 CAmount GetDevFundAmount(int nHeight, const Consensus::Params& consensusParams)
 {
-    if (nHeight < 1 || nHeight >= consensusParams.nDevFundEndHeight || consensusParams.nDevFundPercent <= 0 ||
+    if (nHeight < 1 || nHeight >= consensusParams.nDevFundEndHeight || consensusParams.nDevFundBasisPoints <= 0 ||
         consensusParams.devFundScript.empty()) {
         return 0;
     }
-    return GetBlockSubsidy(nHeight, consensusParams) * consensusParams.nDevFundPercent / 100;
+    return GetBlockSubsidy(nHeight, consensusParams) * consensusParams.nDevFundBasisPoints / 10000;
 }
 
 CoinsViews::CoinsViews(

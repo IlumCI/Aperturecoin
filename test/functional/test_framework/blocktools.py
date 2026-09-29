@@ -118,12 +118,12 @@ def script_BIP34_coinbase_height(height):
 # Regtest development fund script: P2WSH(OP_TRUE). Enforced only below
 # -devfundendheight (default 0, i.e. disabled on regtest).
 DEVFUND_REGTEST_SCRIPT = CScript([OP_0, sha256(CScript([OP_TRUE]))])
-DEVFUND_PERCENT = 5
+DEVFUND_BASIS_POINTS = 150
 
 
 def devfund_amount(height):
     """Minimum regtest development fund payment at the given height, if enforced."""
-    return ((50 * COIN) >> (height // 150)) * DEVFUND_PERCENT // 100
+    return ((50 * COIN) >> (height // 150)) * DEVFUND_BASIS_POINTS // 10000
 
 
 def create_coinbase(height, pubkey=None, extra_output_script=None, fees=0):

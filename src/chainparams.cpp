@@ -129,9 +129,9 @@ public:
         consensus.mweb_pegout_feature_activation_height = 0;
         consensus.mweb_extradata_feature_activation_height = 0;
 
-        // Development fund: 5% of the subsidy until the first halving.
+        // Development fund: 1.5% of the subsidy until the first halving.
         consensus.devFundScript = DevFundPlaceholderScript();
-        consensus.nDevFundPercent = 5;
+        consensus.nDevFundBasisPoints = 150;
         consensus.nDevFundEndHeight = consensus.nSubsidyHalvingInterval;
 
         /**
@@ -232,7 +232,7 @@ public:
         consensus.mweb_extradata_feature_activation_height = 0;
 
         consensus.devFundScript = DevFundPlaceholderScript();
-        consensus.nDevFundPercent = 5;
+        consensus.nDevFundBasisPoints = 150;
         consensus.nDevFundEndHeight = consensus.nSubsidyHalvingInterval;
 
         pchMessageStart[0] = 0xb3;
@@ -330,7 +330,7 @@ public:
         consensus.frozen_mweb_output_ids = GetFrozenMWEBOutputIDs();
         // Development fund is off by default on regtest; see -devfundendheight.
         consensus.devFundScript = DevFundRegTestScript();
-        consensus.nDevFundPercent = 5;
+        consensus.nDevFundBasisPoints = 150;
         consensus.nDevFundEndHeight = 0;
         pchMessageStart[0] = 0xa1;
         pchMessageStart[1] = 0xc5;
