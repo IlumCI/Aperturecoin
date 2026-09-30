@@ -176,6 +176,7 @@ BITCOIN_CORE_H = \
   compat/sanity.h \
   compressor.h \
   consensus/consensus.h \
+  consensus/fraudclaim.h \
   consensus/tx_check.h \
   consensus/tx_verify.h \
   core_io.h \

@@ -18,12 +18,17 @@ namespace {
 
 const unsigned char REQ_TAG[4] = {'A', 'P', 'E', 'R'};
 const unsigned char RES_TAG[4] = {'A', 'P', 'E', 'M'};
+const unsigned char FP_TAG[4] = {'A', 'P', 'F', 'P'};
 
 std::mutex g_model_mutex;
 std::unique_ptr<intmodel::IntModel> g_model;
 
 std::mutex g_cache_mutex;
-std::map<uint256, std::vector<int8_t>> g_cache;
+struct CacheEntry {
+    std::vector<int8_t> embedding;
+    std::vector<intmodel::IntModel::StateHash> states;
+};
+std::map<uint256, CacheEntry> g_cache;
 constexpr size_t CACHE_MAX = 4096;
 
 /** Parse OP_RETURN <tag> <push>...; returns the concatenated data after tag. */
@@ -86,13 +91,18 @@ CScript MakeRequestScript(const std::vector<uint32_t>& ids)
 bool ParseResult(const CScript& script, Result& out)
 {
     std::vector<std::vector<unsigned char>> pushes;
-    if (!ParseTagged(script, RES_TAG, pushes) || pushes.size() < 2) return false;
+    if (!ParseTagged(script, RES_TAG, pushes) || pushes.size() < 3) return false;
     if (pushes[0].size() != 32 || pushes[1].size() != 4) return false;
     out.outpoint = COutPoint(uint256(pushes[0]), ReadLE32(pushes[1].data()));
+    std::vector<unsigned char> body;
+    for (size_t k = 2; k < pushes.size(); ++k) body.insert(body.end(), pushes[k].begin(), pushes[k].end());
+    if (body.size() < 2) return false;
+    const size_t n = body[0] | (body[1] << 8);
+    if (body.size() < 2 + 32 * n) return false;
+    out.states.assign(n, {});
+    for (size_t k = 0; k < n; ++k) std::copy(body.begin() + 2 + 32 * k, body.begin() + 2 + 32 * (k + 1), out.states[k].begin());
     out.embedding.clear();
-    for (size_t k = 2; k < pushes.size(); ++k) {
-        for (unsigned char b : pushes[k]) out.embedding.push_back(static_cast<int8_t>(b));
-    }
+    for (size_t k = 2 + 32 * n; k < body.size(); ++k) out.embedding.push_back(static_cast<int8_t>(body[k]));
     return true;
 }
 
@@ -104,8 +114,119 @@ CScript MakeResultScript(const Result& r)
     s << OP_RETURN << std::vector<unsigned char>(RES_TAG, RES_TAG + 4)
       << std::vector<unsigned char>(r.outpoint.hash.begin(), r.outpoint.hash.end())
       << std::vector<unsigned char>(vout, vout + 4);
-    AppendChunks(s, reinterpret_cast<const unsigned char*>(r.embedding.data()), r.embedding.size());
+    std::vector<unsigned char> body{static_cast<unsigned char>(r.states.size() & 0xff), static_cast<unsigned char>(r.states.size() >> 8)};
+    for (const auto& h : r.states) body.insert(body.end(), h.begin(), h.end());
+    for (int8_t v : r.embedding) body.push_back(static_cast<unsigned char>(v));
+    AppendChunks(s, body.data(), body.size());
     return s;
+}
+
+bool ParseFraudProof(const CScript& script, FraudProof& out)
+{
+    std::vector<std::vector<unsigned char>> pushes;
+    if (!ParseTagged(script, FP_TAG, pushes) || pushes.size() < 2) return false;
+    if (pushes[0].size() != 2 || pushes[1].size() != 1) return false;
+    out.result_index = pushes[0][0] | (pushes[0][1] << 8);
+    out.step = pushes[1][0];
+    std::vector<unsigned char> raw;
+    for (size_t k = 2; k < pushes.size(); ++k) raw.insert(raw.end(), pushes[k].begin(), pushes[k].end());
+    if (raw.size() % 8 != 0) return false;
+    out.state.resize(raw.size() / 8);
+    for (size_t k = 0; k < out.state.size(); ++k) out.state[k] = static_cast<int64_t>(ReadLE64(raw.data() + 8 * k));
+    return true;
+}
+
+CScript MakeFraudProofScript(const FraudProof& p)
+{
+    CScript s;
+    s << OP_RETURN << std::vector<unsigned char>(FP_TAG, FP_TAG + 4)
+      << std::vector<unsigned char>{static_cast<unsigned char>(p.result_index & 0xff), static_cast<unsigned char>(p.result_index >> 8)}
+      << std::vector<unsigned char>{p.step};
+    std::vector<unsigned char> raw(8 * p.state.size());
+    for (size_t k = 0; k < p.state.size(); ++k) WriteLE64(raw.data() + 8 * k, static_cast<uint64_t>(p.state[k]));
+    AppendChunks(s, raw.data(), raw.size());
+    return s;
+}
+
+bool VerifyFraudProof(const intmodel::IntModel& model, const std::vector<uint32_t>& input, const Result& result,
+                      const FraudProof& proof, std::string& why)
+{
+    using IM = intmodel::IntModel;
+    const uint32_t L = model.Config().num_hidden_layers;
+    const size_t T = input.size(), H = model.Config().hidden_size;
+    if (!model.ValidInput(input)) {
+        why = "request cannot be embedded";
+        return false;
+    }
+    // A structurally invalid result cannot be in a valid block; still refuse.
+    if (result.states.size() != L + 1 || result.embedding.size() != H) {
+        why = "malformed result";
+        return false;
+    }
+    if (proof.step == 0) {
+        if (!proof.state.empty()) {
+            why = "step 0 takes no state";
+            return false;
+        }
+        if (IM::HashState(0, model.Tokens(input)) != result.states[0]) return true;
+        why = "embedding lookup matches the commitment";
+        return false;
+    }
+    if (proof.step > L + 1) {
+        why = "step out of range";
+        return false;
+    }
+    if (proof.state.size() != T * H) {
+        why = "state has the wrong size";
+        return false;
+    }
+    // The supplied state must be the one the miner committed as input to this step.
+    if (IM::HashState(proof.step - 1, proof.state) != result.states[proof.step - 1]) {
+        why = "state does not match the committed input";
+        return false;
+    }
+    if (proof.step <= L) {
+        std::vector<int64_t> x = proof.state;
+        model.Layer(proof.step - 1, x, T);
+        if (IM::HashState(proof.step, x) != result.states[proof.step]) return true;
+        why = "layer output matches the commitment";
+        return false;
+    }
+    if (model.Final(proof.state, T) != result.embedding) return true;
+    why = "final embedding matches the result";
+    return false;
+}
+
+bool BuildFraudProof(const intmodel::IntModel& model, const std::vector<uint32_t>& input, const Result& result,
+                     uint16_t result_index, FraudProof& out)
+{
+    using IM = intmodel::IntModel;
+    const uint32_t L = model.Config().num_hidden_layers;
+    if (!model.ValidInput(input) || result.states.size() != L + 1) return false;
+    const size_t T = input.size();
+    out = FraudProof{};
+    out.result_index = result_index;
+    std::vector<int64_t> x = model.Tokens(input);
+    if (IM::HashState(0, x) != result.states[0]) {
+        out.step = 0;
+        return true;
+    }
+    for (uint32_t l = 0; l < L; ++l) {
+        std::vector<int64_t> next = x;
+        model.Layer(l, next, T);
+        if (IM::HashState(l + 1, next) != result.states[l + 1]) {
+            out.step = static_cast<uint8_t>(l + 1);
+            out.state = std::move(x);
+            return true;
+        }
+        x = std::move(next);
+    }
+    if (model.Final(x, T) != result.embedding) {
+        out.step = static_cast<uint8_t>(L + 1);
+        out.state = std::move(x);
+        return true;
+    }
+    return false;
 }
 
 std::vector<Request> CollectRequests(const CBlock& block)
@@ -191,7 +312,8 @@ void UnloadProtocolModel()
     g_model.reset();
 }
 
-std::vector<int8_t> Embed(const intmodel::IntModel& model, const std::vector<uint32_t>& input, std::vector<intmodel::OpTrace>* trace)
+std::vector<int8_t> Embed(const intmodel::IntModel& model, const std::vector<uint32_t>& input, std::vector<intmodel::OpTrace>* trace,
+                          std::vector<intmodel::IntModel::StateHash>* states)
 {
     blake3_hasher h;
     blake3_hasher_init(&h);
@@ -205,13 +327,18 @@ std::vector<int8_t> Embed(const intmodel::IntModel& model, const std::vector<uin
     if (!trace) {
         std::lock_guard<std::mutex> lock(g_cache_mutex);
         const auto it = g_cache.find(key);
-        if (it != g_cache.end()) return it->second;
+        if (it != g_cache.end()) {
+            if (states) *states = it->second.states;
+            return it->second.embedding;
+        }
     }
-    std::vector<int8_t> e = model.Embed(input, trace);
+    CacheEntry entry;
+    entry.embedding = model.Embed(input, trace, &entry.states);
+    if (states) *states = entry.states;
     std::lock_guard<std::mutex> lock(g_cache_mutex);
     if (g_cache.size() >= CACHE_MAX) g_cache.clear();
-    g_cache[key] = e;
-    return e;
+    g_cache[key] = entry;
+    return entry.embedding;
 }
 
 std::string CheckBlockEmbeddings(const CBlock& block, const Consensus::Params& params)
@@ -227,11 +354,16 @@ std::string CheckBlockEmbeddings(const CBlock& block, const Consensus::Params& p
         if (ParseResult(out.scriptPubKey, r)) results.push_back(std::move(r));
     }
     if (results.size() != requests.size()) return "bad-embed-result-count";
+    const size_t n_states = model->Config().num_hidden_layers + 1, H = model->Config().hidden_size;
     for (size_t k = 0; k < requests.size(); ++k) {
         const std::vector<uint32_t> input = ModelInput(*model, requests[k].ids);
         if (input.empty()) return "bad-embed-request";
         if (results[k].outpoint != requests[k].outpoint) return "bad-embed-result-order";
-        if (Embed(*model, input) != results[k].embedding) return "bad-embed-result";
+        if (results[k].states.size() != n_states || results[k].embedding.size() != H) return "bad-embed-result-format";
+        // Optimistic chains leave correctness to fraud claims (CheckFraudClaim).
+        if (params.fPowV2Optimistic) continue;
+        std::vector<intmodel::IntModel::StateHash> states;
+        if (Embed(*model, input, nullptr, &states) != results[k].embedding || states != results[k].states) return "bad-embed-result";
     }
     return "";
 }

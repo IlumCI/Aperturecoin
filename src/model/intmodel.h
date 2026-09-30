@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
@@ -55,12 +56,26 @@ public:
     /** Weight matmuls in forward order: op = layer * 7 + {q,k,v,o,gate,up,down}. */
     const std::vector<matmulpow_v2::Op>& Ops() const { return m_ops; }
 
+    using StateHash = std::array<unsigned char, 32>;
+
     /**
      * Embed one token sequence (ending with EOS). Returns the int8 direction
      * vector (hidden_size). If trace is set, every weight-matmul input is
-     * reported in forward order.
+     * reported in forward order. If states is set, it receives the
+     * num_hidden_layers + 1 state hashes committed in results (fraud proofs,
+     * doc/pouw-v2.md): HashState(0, x_0) after the embedding lookup and
+     * HashState(l, x_l) after layer l.
      */
-    std::vector<int8_t> Embed(const std::vector<uint32_t>& ids, std::vector<OpTrace>* trace = nullptr) const;
+    std::vector<int8_t> Embed(const std::vector<uint32_t>& ids, std::vector<OpTrace>* trace = nullptr,
+                              std::vector<StateHash>* states = nullptr) const;
+
+    /** The forward pass as single steps (fraud-proof granularity). x is T x hidden_size, Q16. */
+    bool ValidInput(const std::vector<uint32_t>& ids) const;
+    std::vector<int64_t> Tokens(const std::vector<uint32_t>& ids) const;
+    void Layer(uint32_t l, std::vector<int64_t>& x, size_t T, std::vector<OpTrace>* trace = nullptr) const;
+    std::vector<int8_t> Final(std::vector<int64_t> x, size_t T) const;
+    /** BLAKE3("ApertureState/v0" || index u32 LE || x as int64 LE). */
+    static StateHash HashState(uint32_t index, const std::vector<int64_t>& x);
 
     /** Byte tokenizer (tiny/regtest model): UTF-8 bytes then EOS. */
     std::vector<uint32_t> TokenizeBytes(const std::string& text) const;

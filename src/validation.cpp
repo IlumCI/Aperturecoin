@@ -5,6 +5,7 @@
 
 #include <validation.h>
 
+#include <consensus/fraudclaim.h>
 #include <model/embed.h>
 
 #include <arith_uint256.h>
@@ -212,6 +213,62 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState &state, const C
 static FILE* OpenUndoFile(const FlatFilePos &pos, bool fReadOnly = false);
 static FlatFileSeq BlockFileSeq();
 static FlatFileSeq UndoFileSeq();
+
+/**
+ * Fraud claims (doc/pouw-v2.md, "Fraud proofs"). A claim proves one embedding
+ * result of block H wrong by re-executing a single forward-pass step, and
+ * spends every positive-value coinbase output of H except the development
+ * fund. It is exempt from coinbase maturity and script checks, so it must
+ * be validated here wherever it can enter the mempool or a block.
+ */
+std::string CheckFraudClaim(const CTransaction& tx, const CCoinsViewCache& view, const Consensus::Params& params) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    const intmodel::IntModel* model = embed::GetProtocolModel();
+    if (!model) return "fraud-claim-no-model";
+    embed::FraudProof proof;
+    int claims = 0;
+    for (const CTxOut& out : tx.vout) {
+        if (!IsFraudClaimScript(out.scriptPubKey)) continue;
+        if (++claims > 1 || !embed::ParseFraudProof(out.scriptPubKey, proof)) return "fraud-claim-malformed";
+    }
+    if (tx.vin.empty()) return "fraud-claim-malformed";
+    const uint256 coinbase_txid = tx.vin[0].prevout.hash;
+    int height = -1;
+    for (const CTxIn& in : tx.vin) {
+        const Coin& coin = view.AccessCoin(in.prevout);
+        if (coin.IsSpent() || !coin.IsCoinBase() || in.prevout.hash != coinbase_txid) return "fraud-claim-bad-inputs";
+        if (height >= 0 && static_cast<int>(coin.nHeight) != height) return "fraud-claim-bad-inputs";
+        height = coin.nHeight;
+    }
+    if (height < params.nPowV2Height || height > ::ChainActive().Height()) return "fraud-claim-bad-inputs";
+    CBlock block;
+    if (!ReadBlockFromDisk(block, ::ChainActive()[height], params) || block.vtx.empty() || block.vtx[0]->GetHash() != coinbase_txid) {
+        return "fraud-claim-block-unavailable";
+    }
+    // The claim must forfeit the whole miner share: every positive-value
+    // coinbase output except the development fund.
+    const CScript devfund(params.devFundScript.begin(), params.devFundScript.end());
+    std::set<uint32_t> required;
+    for (uint32_t n = 0; n < block.vtx[0]->vout.size(); ++n) {
+        const CTxOut& out = block.vtx[0]->vout[n];
+        if (out.nValue > 0 && out.scriptPubKey != devfund) required.insert(n);
+    }
+    std::set<uint32_t> spent;
+    for (const CTxIn& in : tx.vin) spent.insert(in.prevout.n);
+    if (spent != required) return "fraud-claim-incomplete";
+
+    const std::vector<embed::Request> requests = embed::CollectRequests(block);
+    std::vector<embed::Result> results;
+    for (const CTxOut& out : block.vtx[0]->vout) {
+        embed::Result r;
+        if (embed::ParseResult(out.scriptPubKey, r)) results.push_back(std::move(r));
+    }
+    if (proof.result_index >= results.size() || results.size() != requests.size()) return "fraud-claim-bad-index";
+    const std::vector<uint32_t> input = embed::ModelInput(*model, requests[proof.result_index].ids);
+    std::string why;
+    if (!embed::VerifyFraudProof(*model, input, results[proof.result_index], proof, why)) return "fraud-claim-invalid (" + why + ")";
+    return "";
+}
 
 bool CheckFinalTx(const CTransaction &tx, int flags)
 {
@@ -737,6 +794,10 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     if (!Consensus::CheckTxInputs(tx, state, m_view, GetSpendHeight(m_view), nFees)) {
         return false; // state filled in by CheckTxInputs
     }
+    if (IsFraudClaimTx(tx)) {
+        const std::string reject = CheckFraudClaim(tx, m_view, args.m_chainparams.GetConsensus());
+        if (!reject.empty()) return state.Invalid(TxValidationResult::TX_CONSENSUS, reject);
+    }
 
     // If fee_out is passed, return the fee to the caller
     if (args.m_fee_out) {
@@ -746,7 +807,8 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // Check for non-standard pay-to-script-hash in inputs
     const auto& params = args.m_chainparams.GetConsensus();
     auto taproot_state = VersionBitsState(::ChainActive().Tip(), params, Consensus::DEPLOYMENT_TAPROOT, versionbitscache);
-    if (fRequireStandard && !AreInputsStandard(tx, m_view, taproot_state == ThresholdState::ACTIVE)) {
+    // Fraud claims never execute input scripts (CheckFraudClaim authorizes them).
+    if (fRequireStandard && !IsFraudClaimTx(tx) && !AreInputsStandard(tx, m_view, taproot_state == ThresholdState::ACTIVE)) {
         return state.Invalid(TxValidationResult::TX_INPUTS_NOT_STANDARD, "bad-txns-nonstandard-inputs");
     }
 
@@ -1612,6 +1674,9 @@ void InitScriptExecutionCache() {
 bool CheckInputScripts(const CTransaction& tx, TxValidationState &state, const CCoinsViewCache &inputs, unsigned int flags, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, std::vector<CScriptCheck> *pvChecks) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     if (tx.IsCoinBase()) return true;
+    // Fraud claims spend forfeited coinbase outputs without signatures; their
+    // authorization is the proof checked by CheckFraudClaim().
+    if (IsFraudClaimTx(tx)) return true;
 
     if (pvChecks) {
         pvChecks->reserve(tx.vin.size());
@@ -2250,6 +2315,12 @@ bool CChainState::ConnectBlock(const CBlock& block, BlockValidationState& state,
                 state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
                             tx_state.GetRejectReason(), tx_state.GetDebugMessage());
                 return error("%s: Consensus::CheckTxInputs: %s, %s", __func__, tx.GetHash().ToString(), state.ToString());
+            }
+            if (IsFraudClaimTx(tx)) {
+                const std::string reject = CheckFraudClaim(tx, view, chainparams.GetConsensus());
+                if (!reject.empty()) {
+                    return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, reject, "invalid fraud claim");
+                }
             }
             nFees += txfee;
             if (!MoneyRange(nFees)) {

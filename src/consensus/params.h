@@ -103,6 +103,12 @@ struct Params {
     int nPowV2Height{std::numeric_limits<int>::max()};
     unsigned int nPowV2Rank{32};
     std::string powV2ModelId;
+    /**
+     * Optimistic verification: blocks are accepted without recomputing their
+     * embedding results; wrong results are proven by fraud claims, which
+     * forfeit the offending block's coinbase (doc/pouw-v2.md, "Fraud proofs").
+     */
+    bool fPowV2Optimistic{false};
     /** Maximum embedding requests served per block. */
     unsigned int nMaxEmbedRequests{32};
     /**

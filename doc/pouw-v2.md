@@ -40,7 +40,7 @@ What consensus enforces, and what it does not:
 |---|---|
 | Every ticket is a product with the **real protocol weights** | Consensus. Nodes hold the weights and check the ticket's weight panel against `weights_root`. |
 | Tickets cannot be shortcut, whatever the activations | KW Assumption 6.4 (Variant Q) or its integer analogue A1 (Variant Z). Security holds for any left-hand matrix. |
-| The embeddings in a block are correct | Fraud proofs. Request fees mature after a challenge window, and a single-step fraud proof forfeits them. |
+| The embeddings in a block are correct | Full verification by default. On optimistic chains, one-step fraud claims forfeit the offending block's coinbase to the challenger ("Fraud proofs"). |
 | The activations came from real user inputs | Not enforced. A miner can run the real model on its own junk inputs. That earns no request fees, and the useful share is measured on chain. |
 
 This closes most of the gap measured for a deployed matmul proof-of-useful-work
@@ -252,33 +252,85 @@ Losing miners have also computed embeddings. Two uses are left open:
 - Or they rejoin the next block's batch, because requests stay pending until
   served on chain.
 
-**The fraud-proof game below replaces full verification** once the protocol
-model is too expensive for every node to re-run every request. That is the
-case for the placeholder at 440 M MACs per token, and for the project model.
+**Fraud proofs (below) replace full verification** on optimistic chains, where
+the protocol model is too expensive for every node to re-run every request.
+That is the case for the placeholder at 440 M MACs per token, and for the
+project model.
 
 Fraud proofs
 ------------
 
-Any node can recompute a request's embedding: one forward pass, about 2e9
-MACs per token, which takes seconds for typical inputs. On a mismatch:
+Implemented: `src/model/embed.cpp`, `CheckFraudClaim` in `validation.cpp`,
+and `consensus/fraudclaim.h`. On an **optimistic** chain
+(`Consensus::Params::fPowV2Optimistic`; on regtest `-powv2optimistic`):
+- Blocks are accepted after checking only the structure of their results:
+  one result per request, in order, with L+1 state hashes and an embedding of
+  the right size.
+- Nodes do not re-run the model.
+- A wrong result is proven by anyone, at any time until the offending
+  coinbase is spent.
 
-1. **Challenge.** A transaction that references the result and posts a bond.
-2. **Bisection.** The challenger names the first op whose committed output (a
-   leaf of act_root) differs from its own. The miner must publish, in a
-   response transaction within 72 blocks, that op's input and output rows
-   with Merkle paths to act_root.
-3. **Single-step check in consensus.** For the named row, nodes recompute one
-   op's output row from the committed input row and the local weights. That
-   is at most d_in·d_out MACs (16M for 4096 × 4096), or one integer
-   nonlinearity step. If the result differs, or the miner does not respond,
-   the maturing fees are forfeited: half to the challenger, half to the
-   research pool (`doc/research-market.md`).
-4. **Failed challenge.** A challenge that fails forfeits its bond to the
-   miner.
+**Commitments.** Every result carries the forward pass's state hashes
+`h_0 … h_L`, where L is the number of layers:
 
-Because the arithmetic is exact int8/int32, a single-step check is
-unambiguous. There is no floating-point tolerance to argue about. This is the
-reason for the integer inference profile.
+```
+h_l = BLAKE3("ApertureState/v0" || l (u32 LE) || x_l)      x_l: T x hidden int64 (Q16), after layer l (x_0: embedding lookup)
+result = OP_RETURN "APEM" <txid> <vout> <u16 L+1 || h_0 … h_L || embedding int8>
+```
+
+**Claim.** The claim is non-interactive. The request, the weights and the
+arithmetic are all public and exact, so a challenger recomputes the honest
+states and names the **first** step where the miner's commitments diverge:
+
+| step | the claim supplies | nodes re-execute | proven if |
+|---|---|---|---|
+| 0 | nothing | embedding lookup of the request | `h(x_0) ≠ h_0` |
+| l = 1…L | `x_{l-1}`, which must hash to the committed `h_{l-1}` | one layer | `h(layer_l(x_{l-1})) ≠ h_l` |
+| L+1 | `x_L`, which must hash to the committed `h_L` | final norm and pooling | `final(x_L) ≠ embedding` |
+
+The miner has no data to withhold: the claim's input state is the honest
+state, which the challenger recomputes, and it must match the miner's own
+commitment. Verification costs **one step**, not one forward pass.
+
+**Claim transaction**
+(`OP_RETURN "APFP" <result index u16> <step u8> <state int64 LE>`, built by
+`createfraudclaim`):
+- It spends **every positive-value coinbase output of the offending block
+  except the development fund**, and pays them, less its fee, wherever the
+  challenger chooses.
+- It needs no signatures. Script checks, input-standardness checks and
+  coinbase maturity are replaced by `CheckFraudClaim`, which runs in both the
+  mempool and `ConnectBlock`.
+- A claim that proves nothing is simply an invalid transaction, so there is
+  no challenger bond.
+- A second claim on the same block fails, because the coinbase is already
+  spent.
+
+**Challenge window.** The challenge window is the coinbase maturity
+(100 blocks). After that the miner can spend the coinbase, and fraud can no
+longer be punished. **Cheating on one embedding therefore risks the whole
+block reward**, and the reward goes to whoever proves it.
+
+**Monitoring.** `checkblockembeddings <blockhash>` recomputes a block's
+results and names the first wrong step of each. A watchtower runs it on
+every new block and broadcasts claims.
+
+**Limits and open items:**
+- A claim carries one layer's input state, T × hidden × 8 bytes: 128 KiB
+  for the tiny model at 64 tokens, 4 MiB for the placeholder at 512 tokens.
+  Large models need either sub-layer commitments (per row, or per attention
+  and MLP block) or a cap on request length. The current limit is the
+  standard transaction weight.
+- Anyone can submit claims that make nodes compute one layer before they are
+  rejected. The cost is bounded by one step per claim and by the mempool's
+  ordinary limits. There is no dedicated rate limit yet.
+- Full verification (`fPowV2Optimistic = false`) is still the default. It also
+  checks the state commitments, so a result with a wrong commitment is
+  invalid there as well.
+
+Because the arithmetic is exact int8/int32/int64, each step is
+unambiguous. There is no floating-point tolerance to argue about, which is
+the reason for the integer inference profile.
 
 Usefulness accounting
 ---------------------
@@ -355,8 +407,14 @@ Implementation status
     - rejection of wrong embeddings, out-of-range panels, and v1 headers after
       activation.
 
+- **Fraud proofs.** Optimistic verification, per-layer state commitments in
+  results, one-step claims that forfeit the coinbase, `checkblockembeddings`
+  and `createfraudclaim`.
+  - Tested by `feature_pouw_v2_fraud.py` (wrong commitments at steps 0, 1 and
+    3; tampered, partial and repeated claims; immature spends).
+  - `protocolmodel_tests/fraud_proofs` covers the proof logic.
+
 **Not yet:**
-- the fraud-proof game and maturing request fees;
 - optimized CPU and GPU kernels;
 - mainnet and testnet parameters;
 - trimming the panel from the in-memory block index (the Zcash-style

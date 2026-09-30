@@ -7,6 +7,7 @@
 
 #include <policy/policy.h>
 
+#include <consensus/fraudclaim.h>
 #include <model/embed.h>
 
 #include <primitives/token.h>
@@ -71,6 +72,9 @@ bool IsStandard(const CScript& scriptPubKey, TxoutType& whichType)
             return false;
         if (m < 1 || m > n)
             return false;
+    } else if (whichType == TxoutType::NULL_DATA && IsFraudClaimScript(scriptPubKey)) {
+        // Fraud claims carry one forward-pass state; bounded by the tx weight limit.
+        return true;
     } else if (whichType == TxoutType::NULL_DATA && embed::IsRequestScript(scriptPubKey)) {
         // Embedding requests (doc/pouw-v2.md) carry token ids, not arbitrary data.
         return scriptPubKey.size() <= MAX_STANDARD_EMBED_REQUEST_SIZE;
@@ -135,6 +139,8 @@ bool IsStandardTx(const CTransaction& tx, bool permit_bare_multisig, const CFeeR
 
         if (whichType == TxoutType::NULL_DATA && embed::IsRequestScript(txout.scriptPubKey))
             nRequestOut++;
+        else if (whichType == TxoutType::NULL_DATA && IsFraudClaimScript(txout.scriptPubKey))
+            continue;
         else if (whichType == TxoutType::NULL_DATA)
             nDataOut++;
         else if ((whichType == TxoutType::MULTISIG) && (!permit_bare_multisig)) {

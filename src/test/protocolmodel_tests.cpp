@@ -4,6 +4,7 @@
 
 #include <crypto/matmulpow_v2.h>
 #include <model/apm.h>
+#include <model/embed.h>
 #include <model/intmodel.h>
 #include <test/util/setup_common.h>
 
@@ -138,6 +139,49 @@ BOOST_AUTO_TEST_CASE(ticket_rejects_bad_input)
     t.j = 0;
     panel[5] = 96; // above QMAX
     BOOST_CHECK(!matmulpow_v2::TicketTile(sigma, 8, od, t, panel.data(), tile.data()));
+}
+
+BOOST_AUTO_TEST_CASE(fraud_proofs)
+{
+    // One-step fraud proofs over the per-layer state commitments.
+    const auto model = TinyModel();
+    const std::vector<uint32_t> input = model->TokenizeBytes("fraud proof");
+    embed::Result honest;
+    honest.embedding = model->Embed(input, nullptr, &honest.states);
+    BOOST_REQUIRE_EQUAL(honest.states.size(), 3U);
+    embed::FraudProof proof;
+    BOOST_CHECK(!embed::BuildFraudProof(*model, input, honest, 0, proof));
+
+    for (uint8_t step = 0; step <= 3; ++step) {
+        embed::Result cheat = honest;
+        if (step == 3) {
+            cheat.embedding[5] ^= 1;
+        } else {
+            cheat.states[step][0] ^= 1;
+        }
+        BOOST_REQUIRE(embed::BuildFraudProof(*model, input, cheat, 7, proof));
+        BOOST_CHECK_EQUAL(proof.step, step);
+        BOOST_CHECK_EQUAL(proof.result_index, 7);
+        std::string why;
+        BOOST_CHECK(embed::VerifyFraudProof(*model, input, cheat, proof, why));
+        // The same proof does not convict the honest result.
+        BOOST_CHECK(!embed::VerifyFraudProof(*model, input, honest, proof, why));
+        // Round trip through the claim script.
+        embed::FraudProof parsed;
+        BOOST_REQUIRE(embed::ParseFraudProof(embed::MakeFraudProofScript(proof), parsed));
+        BOOST_CHECK(parsed.step == proof.step && parsed.state == proof.state && parsed.result_index == proof.result_index);
+        if (!proof.state.empty()) {
+            // A state that is not the committed input is refused.
+            embed::FraudProof forged = proof;
+            forged.state[0] += 1;
+            BOOST_CHECK(!embed::VerifyFraudProof(*model, input, cheat, forged, why));
+            BOOST_CHECK_EQUAL(why, "state does not match the committed input");
+        }
+    }
+    // Result scripts round trip with their state commitments.
+    embed::Result parsed;
+    BOOST_REQUIRE(embed::ParseResult(embed::MakeResultScript(honest), parsed));
+    BOOST_CHECK(parsed.states == honest.states && parsed.embedding == honest.embedding);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

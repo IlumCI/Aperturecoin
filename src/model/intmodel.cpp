@@ -140,16 +140,20 @@ std::vector<uint32_t> IntModel::TokenizeBytes(const std::string& text) const
     return ids;
 }
 
-std::vector<int8_t> IntModel::Embed(const std::vector<uint32_t>& ids, std::vector<OpTrace>* trace) const
+bool IntModel::ValidInput(const std::vector<uint32_t>& ids) const
 {
     const apm::Config& c = Config();
-    const size_t T = ids.size();
-    const size_t H = c.hidden_size, NH = c.num_attention_heads, KV = c.num_key_value_heads, D = c.head_dim;
-    if (T == 0 || T > c.max_positions) return {};
+    if (ids.empty() || ids.size() > c.max_positions) return false;
     for (uint32_t id : ids) {
-        if (id >= c.vocab_size) return {};
+        if (id >= c.vocab_size) return false;
     }
+    return true;
+}
 
+std::vector<int64_t> IntModel::Tokens(const std::vector<uint32_t>& ids) const
+{
+    const apm::Config& c = Config();
+    const size_t T = ids.size(), H = c.hidden_size;
     const apm::Tensor& eq = *m_model->Get("embed.q");
     const apm::Tensor& es = *m_model->Get("embed.s");
     Mat x(T * H);
@@ -157,6 +161,13 @@ std::vector<int8_t> IntModel::Embed(const std::vector<uint32_t>& ids, std::vecto
         for (size_t k = 0; k < H; ++k)
             x[t * H + k] = RDiv(int64_t{eq.i8()[static_cast<size_t>(ids[t]) * H + k]} * es.i64(ids[t]), int64_t{1} << (WS_SHIFT - FRAC));
 
+    return x;
+}
+
+void IntModel::Layer(uint32_t l, std::vector<int64_t>& x, size_t T, std::vector<OpTrace>* trace) const
+{
+    const apm::Config& c = Config();
+    const size_t H = c.hidden_size, NH = c.num_attention_heads, KV = c.num_key_value_heads, D = c.head_dim;
     auto linear = [&](const Mat& in, size_t din, uint16_t op) {
         const matmulpow_v2::Op& od = m_ops[op];
         const apm::Tensor& ws = *m_scales[op];
@@ -214,50 +225,53 @@ std::vector<int8_t> IntModel::Embed(const std::vector<uint32_t>& ids, std::vecto
         }
     };
 
-    for (uint32_t l = 0; l < c.num_hidden_layers; ++l) {
-        const std::string p = strprintf("layers.%u.", l);
-        const uint16_t op0 = static_cast<uint16_t>(l * 7);
-        Mat h = x;
-        for (size_t t = 0; t < T; ++t) RmsNormRow(&h[t * H], H, *m_model->Get(p + "input_norm"));
-        Mat q = linear(h, H, op0 + 0), k = linear(h, H, op0 + 1), v = linear(h, H, op0 + 2);
-        rope_norm(q, NH, *m_model->Get(p + "q_norm"));
-        rope_norm(k, KV, *m_model->Get(p + "k_norm"));
-        Mat att(T * NH * D, 0);
-        std::vector<int64_t> sc(T), pr(T);
-        for (size_t hh = 0; hh < NH; ++hh) {
-            const size_t kv = hh / (NH / KV);
-            for (size_t a = 0; a < T; ++a) {
-                int64_t mx = INT64_MIN;
-                for (size_t b = 0; b <= a; ++b) {
-                    int64_t dot = 0;
-                    for (size_t d = 0; d < D; ++d) dot += q[(a * NH + hh) * D + d] * k[(b * KV + kv) * D + d];
-                    sc[b] = RDiv(RDiv(dot, ONE) * m_isq, ONE);
-                    mx = std::max(mx, sc[b]);
-                }
-                int64_t tot = 0;
-                for (size_t b = 0; b <= a; ++b) {
-                    pr[b] = IExpNeg(sc[b] - mx);
-                    tot += pr[b];
-                }
-                for (size_t b = 0; b <= a; ++b) pr[b] = RDiv(pr[b] * ONE, tot);
-                for (size_t d = 0; d < D; ++d) {
-                    int64_t acc = 0;
-                    for (size_t b = 0; b <= a; ++b) acc += pr[b] * v[(b * KV + kv) * D + d];
-                    att[(a * NH + hh) * D + d] = RDiv(acc, ONE);
-                }
+    const std::string p = strprintf("layers.%u.", l);
+    const uint16_t op0 = static_cast<uint16_t>(l * 7);
+    Mat h = x;
+    for (size_t t = 0; t < T; ++t) RmsNormRow(&h[t * H], H, *m_model->Get(p + "input_norm"));
+    Mat q = linear(h, H, op0 + 0), k = linear(h, H, op0 + 1), v = linear(h, H, op0 + 2);
+    rope_norm(q, NH, *m_model->Get(p + "q_norm"));
+    rope_norm(k, KV, *m_model->Get(p + "k_norm"));
+    Mat att(T * NH * D, 0);
+    std::vector<int64_t> sc(T), pr(T);
+    for (size_t hh = 0; hh < NH; ++hh) {
+        const size_t kv = hh / (NH / KV);
+        for (size_t a = 0; a < T; ++a) {
+            int64_t mx = INT64_MIN;
+            for (size_t b = 0; b <= a; ++b) {
+                int64_t dot = 0;
+                for (size_t d = 0; d < D; ++d) dot += q[(a * NH + hh) * D + d] * k[(b * KV + kv) * D + d];
+                sc[b] = RDiv(RDiv(dot, ONE) * m_isq, ONE);
+                mx = std::max(mx, sc[b]);
+            }
+            int64_t tot = 0;
+            for (size_t b = 0; b <= a; ++b) {
+                pr[b] = IExpNeg(sc[b] - mx);
+                tot += pr[b];
+            }
+            for (size_t b = 0; b <= a; ++b) pr[b] = RDiv(pr[b] * ONE, tot);
+            for (size_t d = 0; d < D; ++d) {
+                int64_t acc = 0;
+                for (size_t b = 0; b <= a; ++b) acc += pr[b] * v[(b * KV + kv) * D + d];
+                att[(a * NH + hh) * D + d] = RDiv(acc, ONE);
             }
         }
-        const Mat o = linear(att, NH * D, op0 + 3);
-        for (size_t z = 0; z < x.size(); ++z) x[z] += o[z];
-        h = x;
-        for (size_t t = 0; t < T; ++t) RmsNormRow(&h[t * H], H, *m_model->Get(p + "post_norm"));
-        const size_t FF = c.intermediate_size;
-        Mat g = linear(h, H, op0 + 4);
-        const Mat u = linear(h, H, op0 + 5);
-        for (size_t z = 0; z < g.size(); ++z) g[z] = RDiv(Silu(g[z]) * u[z], ONE);
-        const Mat dn = linear(g, FF, op0 + 6);
-        for (size_t z = 0; z < x.size(); ++z) x[z] += dn[z];
     }
+    const Mat o = linear(att, NH * D, op0 + 3);
+    for (size_t z = 0; z < x.size(); ++z) x[z] += o[z];
+    h = x;
+    for (size_t t = 0; t < T; ++t) RmsNormRow(&h[t * H], H, *m_model->Get(p + "post_norm"));
+    const size_t FF = c.intermediate_size;
+    Mat g = linear(h, H, op0 + 4);
+    const Mat u = linear(h, H, op0 + 5);
+    for (size_t z = 0; z < g.size(); ++z) g[z] = RDiv(Silu(g[z]) * u[z], ONE);
+    const Mat dn = linear(g, FF, op0 + 6);
+    for (size_t z = 0; z < x.size(); ++z) x[z] += dn[z];
+}
+
+std::vector<int8_t> IntModel::Final(std::vector<int64_t> x, size_t T) const
+{
+    const size_t H = Config().hidden_size;
     int64_t* last = &x[(T - 1) * H];
     RmsNormRow(last, H, *m_model->Get("norm"));
     int64_t mx = 0;
@@ -265,6 +279,38 @@ std::vector<int8_t> IntModel::Embed(const std::vector<uint32_t>& ids, std::vecto
     std::vector<int8_t> out(H);
     for (size_t k = 0; k < H; ++k) out[k] = static_cast<int8_t>(RDiv(last[k] * 127, mx == 0 ? 1 : mx));
     return out;
+}
+
+
+IntModel::StateHash IntModel::HashState(uint32_t index, const std::vector<int64_t>& x)
+{
+    static const char TAG[] = "ApertureState/v0";
+    blake3_hasher h;
+    blake3_hasher_init(&h);
+    blake3_hasher_update(&h, TAG, sizeof(TAG) - 1);
+    unsigned char b[8];
+    WriteLE32(b, index);
+    blake3_hasher_update(&h, b, 4);
+    for (int64_t v : x) {
+        WriteLE64(b, static_cast<uint64_t>(v));
+        blake3_hasher_update(&h, b, 8);
+    }
+    StateHash out;
+    blake3_hasher_finalize(&h, out.data(), out.size());
+    return out;
+}
+
+std::vector<int8_t> IntModel::Embed(const std::vector<uint32_t>& ids, std::vector<OpTrace>* trace, std::vector<StateHash>* states) const
+{
+    if (!ValidInput(ids)) return {};
+    const size_t T = ids.size();
+    std::vector<int64_t> x = Tokens(ids);
+    if (states) states->assign(1, HashState(0, x));
+    for (uint32_t l = 0; l < Config().num_hidden_layers; ++l) {
+        Layer(l, x, T, trace);
+        if (states) states->push_back(HashState(l + 1, x));
+    }
+    return Final(std::move(x), T);
 }
 
 // ------------------------------------------------------------------ tiny --

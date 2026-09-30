@@ -37,9 +37,11 @@ TEXTS = [
 ]
 
 
-def result_script(txid_hex, vout, embedding):
+def result_script(txid_hex, vout, embedding, states):
+    """OP_RETURN "APEM" <txid> <vout> <state_count u16 || state hashes || embedding> (doc/pouw-v2.md)."""
+    body = struct.pack("<H", len(states)) + b"".join(states) + embedding
     pushes = [b"APEM", ser_uint256(int(txid_hex, 16)), struct.pack("<I", vout)]
-    pushes += [embedding[k:k + 520] for k in range(0, len(embedding), 520)]
+    pushes += [body[k:k + 520] for k in range(0, len(body), 520)]
     return CScript([OP_RETURN] + pushes)
 
 
@@ -64,8 +66,8 @@ class PoUWv2Test(BitcoinTestFramework):
         tip = node.getbestblockhash()
         height = node.getblockcount() + 1
         coinbase = create_coinbase(height)
-        for txid, vout, emb in results:
-            coinbase.vout.append(CTxOut(0, result_script(txid, vout, emb)))
+        for txid, vout, emb, states in results:
+            coinbase.vout.append(CTxOut(0, result_script(txid, vout, emb, states)))
         coinbase.rehash()
         block = create_block(int(tip, 16), coinbase, node.getblock(tip)["mediantime"] + 1, version=0x20000000)
         for raw in txs:
@@ -145,15 +147,20 @@ class PoUWv2Test(BitcoinTestFramework):
         self.log.info("A block whose embedding result is wrong is rejected")
         raw = self.request_tx(n0, n0.createembeddingrequest("useful work")["script"])
         txid = n0.sendrawtransaction(raw)
-        good = bytes.fromhex(n0.embed("useful work")["embedding"])
+        emb = n0.embed("useful work")
+        good = bytes.fromhex(emb["embedding"])
+        states = [bytes.fromhex(h) for h in emb["state_hashes"]]
+        assert_equal(len(states), 3)  # tiny model: lookup + 2 layers
         wrong = bytes([good[0] ^ 1]) + good[1:]
-        block = self.python_block(n0, [raw], [(txid, 1, wrong)])
+        block = self.python_block(n0, [raw], [(txid, 1, wrong, states)])
         assert_equal(n0.submitblock(block.serialize().hex()), "bad-embed-result")
         block = self.python_block(n0, [raw], [])
         assert_equal(n0.submitblock(block.serialize().hex()), "bad-embed-result-count")
 
         self.log.info("The same block with the exact embedding is accepted")
-        block = self.python_block(n0, [raw], [(txid, 1, good)])
+        block = self.python_block(n0, [raw], [(txid, 1, good, states[:2] + [bytes(32)])])
+        assert_equal(n0.submitblock(block.serialize().hex()), "bad-embed-result")
+        block = self.python_block(n0, [raw], [(txid, 1, good, states)])
         assert_equal(n0.submitblock(block.serialize().hex()), None)
         assert_equal(n0.getblockembeddings(block.hash)[0]["embedding"], good.hex())
         self.sync_blocks()

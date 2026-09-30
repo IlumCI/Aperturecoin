@@ -92,7 +92,7 @@ bool FillPowV2Body(CBlock& block, std::vector<intmodel::OpTrace>& trace, std::st
         std::vector<intmodel::OpTrace> part;
         embed::Result res;
         res.outpoint = r.outpoint;
-        res.embedding = embed::Embed(*model, input, &part);
+        res.embedding = embed::Embed(*model, input, &part, &res.states);
         cb.vout.emplace_back(0, embed::MakeResultScript(res));
         merge(part);
     }
@@ -410,7 +410,7 @@ bool BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
         if (fPowV2) {
             // Each request adds a coinbase result (embedding + framing).
             const intmodel::IntModel* model = embed::GetProtocolModel();
-            const uint64_t result_weight = WITNESS_SCALE_FACTOR * ((model ? model->Config().hidden_size : 0) + 80);
+            const uint64_t result_weight = model ? WITNESS_SCALE_FACTOR * (model->Config().hidden_size + 32 * (model->Config().num_hidden_layers + 1) + 100) : 0;
             for (const CTxOut& out : pTx->vout) {
                 if (embed::IsRequestScript(out.scriptPubKey)) {
                     ++nBlockRequests;

@@ -427,6 +427,10 @@ void CRegTestParams::UpdateActivationParametersFromArgs(const ArgsManager& args)
         consensus.nPowV2Height = static_cast<int>(height);
     }
 
+    if (args.IsArgSet("-powv2optimistic")) {
+        consensus.fPowV2Optimistic = args.GetBoolArg("-powv2optimistic", false);
+    }
+
     if (!args.IsArgSet("-vbparams")) return;
 
     for (const std::string& strDeployment : args.GetArgs("-vbparams")) {

@@ -230,6 +230,7 @@ BASE_SCRIPTS = [
     'feature_agent_payments.py',
     'feature_batch_auction.py',
     'feature_pouw_v2.py',
+    'feature_pouw_v2_fraud.py',
     'feature_sv2_pouw.py',
     'feature_nulldummy.py --descriptors',
     'mempool_accept.py',

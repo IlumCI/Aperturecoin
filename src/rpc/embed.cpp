@@ -11,6 +11,10 @@
 #include <rpc/util.h>
 #include <util/strencodings.h>
 #include <validation.h>
+#include <core_io.h>
+#include <key_io.h>
+#include <script/standard.h>
+#include <rpc/rawtransaction_util.h>
 
 #include <cmath>
 
@@ -44,10 +48,17 @@ static std::vector<uint32_t> ParseEmbedInput(const UniValue& v)
     return ids;
 }
 
-static std::vector<int8_t> EmbedIds(const std::vector<uint32_t>& ids)
+static std::vector<int8_t> EmbedIds(const std::vector<uint32_t>& ids, std::vector<intmodel::IntModel::StateHash>* states = nullptr)
 {
     const intmodel::IntModel* model = embed::GetProtocolModel();
-    return embed::Embed(*model, embed::ModelInput(*model, ids));
+    return embed::Embed(*model, embed::ModelInput(*model, ids), nullptr, states);
+}
+
+static UniValue StatesJson(const std::vector<intmodel::IntModel::StateHash>& states)
+{
+    UniValue arr(UniValue::VARR);
+    for (const auto& h : states) arr.push_back(HexStr(Span<const unsigned char>(h.data(), h.size())));
+    return arr;
 }
 
 static std::string I8Hex(const std::vector<int8_t>& v)
@@ -79,16 +90,19 @@ static RPCHelpMan embed_rpc()
                 {RPCResult::Type::STR_HEX, "model_id", "Protocol model id"},
                 {RPCResult::Type::NUM, "tokens", "Tokens run (including EOS)"},
                 {RPCResult::Type::STR_HEX, "embedding", "int8 embedding"},
+                {RPCResult::Type::ARR, "state_hashes", "per-layer state commitments of a result", {{RPCResult::Type::STR_HEX, "", ""}}},
             }},
         RPCExamples{HelpExampleCli("embed", "\"hello world\"")},
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
     const std::vector<uint32_t> ids = ParseEmbedInput(request.params[0]);
-    const std::vector<int8_t> e = EmbedIds(ids);
+    std::vector<intmodel::IntModel::StateHash> states;
+    const std::vector<int8_t> e = EmbedIds(ids, &states);
     UniValue out(UniValue::VOBJ);
     out.pushKV("model_id", embed::GetProtocolModel()->Apm().ModelIdHex());
     out.pushKV("tokens", (uint64_t)ids.size() + 1);
     out.pushKV("embedding", I8Hex(e));
+    out.pushKV("state_hashes", StatesJson(states));
     return out;
 },
     };
@@ -229,6 +243,131 @@ static RPCHelpMan searchembeddings()
     };
 }
 
+static bool ReadBlockByHash(const uint256& hash, CBlock& block, int& height)
+{
+    LOCK(cs_main);
+    const CBlockIndex* pindex = LookupBlockIndex(hash);
+    if (!pindex) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+    if (!ReadBlockFromDisk(block, pindex, Params().GetConsensus())) throw JSONRPCError(RPC_MISC_ERROR, "Block not available");
+    height = pindex->nHeight;
+    return ::ChainActive().Contains(pindex);
+}
+
+static std::vector<embed::Result> BlockResultList(const CBlock& block)
+{
+    std::vector<embed::Result> results;
+    for (const CTxOut& out : block.vtx[0]->vout) {
+        embed::Result r;
+        if (embed::ParseResult(out.scriptPubKey, r)) results.push_back(std::move(r));
+    }
+    return results;
+}
+
+static RPCHelpMan checkblockembeddings()
+{
+    return RPCHelpMan{"checkblockembeddings",
+        "\nRecompute every embedding result of a block with the local protocol model and report wrong ones.\n"
+        "On an optimistic chain (-powv2optimistic) wrong results are valid until a fraud claim proves them;\n"
+        "see createfraudclaim.\n",
+        {{"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "Block hash"}},
+        RPCResult{RPCResult::Type::ARR, "", "",
+            {{RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::NUM, "index", "Result index"},
+                    {RPCResult::Type::STR_HEX, "txid", "Request transaction"},
+                    {RPCResult::Type::BOOL, "valid", "Whether the result and all its state commitments are correct"},
+                    {RPCResult::Type::NUM, "fraud_step", /* optional */ true, "First wrong step: 0 lookup, 1..L layer, L+1 final"},
+                }}}},
+        RPCExamples{HelpExampleCli("checkblockembeddings", "\"<blockhash>\"")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    const intmodel::IntModel* model = embed::GetProtocolModel();
+    if (!model) throw JSONRPCError(RPC_MISC_ERROR, "No protocol model loaded");
+    CBlock block;
+    int height;
+    ReadBlockByHash(ParseHashV(request.params[0], "blockhash"), block, height);
+    const std::vector<embed::Request> requests = embed::CollectRequests(block);
+    const std::vector<embed::Result> results = BlockResultList(block);
+    UniValue out(UniValue::VARR);
+    for (size_t k = 0; k < results.size() && k < requests.size(); ++k) {
+        UniValue o(UniValue::VOBJ);
+        o.pushKV("index", (uint64_t)k);
+        o.pushKV("txid", requests[k].outpoint.hash.GetHex());
+        embed::FraudProof proof;
+        const bool fraud = embed::BuildFraudProof(*model, embed::ModelInput(*model, requests[k].ids), results[k], static_cast<uint16_t>(k), proof);
+        o.pushKV("valid", !fraud);
+        if (fraud) o.pushKV("fraud_step", (int)proof.step);
+        out.push_back(o);
+    }
+    return out;
+},
+    };
+}
+
+static RPCHelpMan createfraudclaim()
+{
+    return RPCHelpMan{"createfraudclaim",
+        "\nBuild a fraud claim proving an embedding result of a block wrong (doc/pouw-v2.md, \"Fraud proofs\").\n"
+        "The claim re-executes one forward-pass step and takes every coinbase output of that block except the\n"
+        "development fund; it needs no signatures. Broadcast it with sendrawtransaction before the miner can\n"
+        "spend the coinbase (coinbase maturity).\n",
+        {
+            {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "Block with the wrong result"},
+            {"index", RPCArg::Type::NUM, RPCArg::Optional::NO, "Result index (see checkblockembeddings)"},
+            {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "Where the forfeited coinbase goes"},
+            {"fee", RPCArg::Type::AMOUNT, /* default */ "0.001", "Fee paid by the claim"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::STR_HEX, "hex", "Claim transaction"},
+                {RPCResult::Type::NUM, "step", "Re-executed step"},
+                {RPCResult::Type::STR_AMOUNT, "amount", "Forfeited amount paid to the address"},
+            }},
+        RPCExamples{HelpExampleCli("createfraudclaim", "\"<blockhash>\" 0 \"<address>\"")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    const intmodel::IntModel* model = embed::GetProtocolModel();
+    if (!model) throw JSONRPCError(RPC_MISC_ERROR, "No protocol model loaded");
+    CBlock block;
+    int height;
+    if (!ReadBlockByHash(ParseHashV(request.params[0], "blockhash"), block, height)) {
+        throw JSONRPCError(RPC_MISC_ERROR, "Block is not in the active chain");
+    }
+    const size_t index = request.params[1].get_int();
+    const CTxDestination dest = DecodeDestination(request.params[2].get_str());
+    if (!IsValidDestination(dest)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
+    const CAmount fee = request.params[3].isNull() ? COIN / 1000 : AmountFromValue(request.params[3]);
+    const std::vector<embed::Request> requests = embed::CollectRequests(block);
+    const std::vector<embed::Result> results = BlockResultList(block);
+    if (index >= results.size() || index >= requests.size()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Result index out of range");
+    embed::FraudProof proof;
+    if (!embed::BuildFraudProof(*model, embed::ModelInput(*model, requests[index].ids), results[index], static_cast<uint16_t>(index), proof)) {
+        throw JSONRPCError(RPC_VERIFY_REJECTED, "The result is correct; there is no fraud to prove");
+    }
+    const Consensus::Params& params = Params().GetConsensus();
+    const CScript devfund(params.devFundScript.begin(), params.devFundScript.end());
+    CMutableTransaction tx;
+    tx.nVersion = 2;
+    CAmount total = 0;
+    const CTransaction& cb = *block.vtx[0];
+    for (uint32_t n = 0; n < cb.vout.size(); ++n) {
+        if (cb.vout[n].nValue > 0 && cb.vout[n].scriptPubKey != devfund) {
+            tx.vin.emplace_back(COutPoint(cb.GetHash(), n));
+            total += cb.vout[n].nValue;
+        }
+    }
+    if (total <= fee) throw JSONRPCError(RPC_VERIFY_REJECTED, "Forfeitable amount does not cover the fee");
+    tx.vout.emplace_back(total - fee, GetScriptForDestination(dest));
+    tx.vout.emplace_back(0, embed::MakeFraudProofScript(proof));
+    UniValue out(UniValue::VOBJ);
+    out.pushKV("hex", EncodeHexTx(CTransaction(tx)));
+    out.pushKV("step", (int)proof.step);
+    out.pushKV("amount", ValueFromAmount(total - fee));
+    return out;
+},
+    };
+}
+
 void RegisterEmbedRPCCommands(CRPCTable& t)
 {
     // clang-format off
@@ -239,6 +378,8 @@ void RegisterEmbedRPCCommands(CRPCTable& t)
         { "embedding",          "createembeddingrequest",   &createembeddingrequest,    {"input"} },
         { "embedding",          "getblockembeddings",       &getblockembeddings,        {"blockhash"} },
         { "embedding",          "searchembeddings",         &searchembeddings,          {"input", "blocks", "count"} },
+        { "embedding",          "checkblockembeddings",     &checkblockembeddings,      {"blockhash"} },
+        { "embedding",          "createfraudclaim",         &createfraudclaim,          {"blockhash", "index", "address", "fee"} },
     };
     // clang-format on
     for (const auto& c : commands) {

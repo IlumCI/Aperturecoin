@@ -93,6 +93,8 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "getblock", 1, "verbosity" },
     { "getblock", 1, "verbose" },
     { "searchembeddings", 1, "blocks" },
+    { "createfraudclaim", 1, "index" },
+    { "createfraudclaim", 3, "fee" },
     { "searchembeddings", 2, "count" },
     { "getblockheader", 1, "verbose" },
     { "getchaintxstats", 0, "nblocks" },
