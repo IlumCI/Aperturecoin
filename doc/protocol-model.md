@@ -47,6 +47,17 @@ pairs):
   95-level int8 weights and the polynomial exponential.
 - A model trained inside the profile (below) removes both.
 
+**End to end on a node** (`contrib/aperture-model/demo_regtest.py`). A regtest
+node was run with `-powv2height=102 -protocolmodel=qwen3-embed-0.6b.apm`:
+1. A wallet paid for 5 embedding requests (`sendembeddingrequest`, Qwen
+   token ids).
+2. `generatetoaddress` mined them in 6.9 s. That covers the forward pass,
+   the ticket search over the real activations, and validation.
+3. All 5 embeddings served in the coinbase equal the Python integer
+   reference bit for bit.
+4. `searchembeddings` over the mined results returned the correct passage
+   for 4 of 4 natural-language queries.
+
 The placeholder is replaced when the project's own model is ready. Replacement
 is a scheduled upgrade to a new `model_id` at a height announced in a
 release.
