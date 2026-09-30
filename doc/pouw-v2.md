@@ -446,8 +446,17 @@ Implementation status
     | profile GEMM | 6.8 GMAC/s | 32.7 GMAC/s |
     | header ticket verification | 83 µs | (reference path) |
 
+- **GPU kernels** (`contrib/gpu-miner`, CUDA with a HIP compat layer).
+  - The whole nonce runs on the device: noise, operands, `dp4a` or WMMA
+    int8 tensor-core tiles, Fold, BLAKE3 and the target check.
+  - The winning ticket is the same as the CPU's.
+  - Wired into `aperture-sv2-miner -kernel=cuda` behind `-DAPERTURE_CUDA=ON`.
+  - Compile-verified for sm_75/80/86/90, and the device math is checked on
+    the host. They have not run on a GPU yet (see that README).
+
 **Not yet:**
-- GPU kernels (see `contrib/gpu-miner`);
+- running the GPU kernels on a GPU (`gpu_selftest`), and compiling the HIP
+  path;
 - mainnet and testnet parameters;
 - trimming the panel from the in-memory block index (the Zcash-style
   header-on-disk approach).

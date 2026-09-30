@@ -23,6 +23,9 @@
 #include <crypto/matmulpow.h>
 #include <crypto/matmulpow_v2.h>
 #include <crypto/matmulpow_v2_kernel.h>
+#ifdef APERTURE_CUDA
+#include <aperture_gpu.h> // contrib/gpu-miner
+#endif
 #include <model/apm.h>
 #include <model/intmodel.h>
 #include <crypto/sha256.h>
@@ -97,6 +100,14 @@ struct Template {
 constexpr uint32_t VERSION_POWV2{1 << 8};
 std::unique_ptr<intmodel::IntModel> g_model;
 matmulpow_v2::Backend g_backend{matmulpow_v2::BestBackend()};
+#ifdef APERTURE_CUDA
+//! -kernel=cuda: one GPU miner, fed by a single mining thread.
+bool g_use_gpu{false};
+int g_gpu_device{0};
+std::mutex g_gpu_mutex;
+std::unique_ptr<aperture_gpu::Miner> g_gpu;
+const UsefulWork* g_gpu_inputs{nullptr};
+#endif
 
 struct Job {
     uint64_t generation{0};
@@ -323,7 +334,22 @@ void MineV2(Connection& conn, const Options& opt, const Job& job, const CMutable
         // One nonce = the noisy forward-pass matmuls; every r x r x r tile is a ticket.
         matmulpow_v2::SearchHit hit;
         uint64_t tickets{0};
-        const bool found{matmulpow_v2::SearchNonce(g_backend, sigma, uw.rank, g_model->Ops(), inputs, target_le.begin(), hit, tickets)};
+        bool found{false};
+#ifdef APERTURE_CUDA
+        if (g_use_gpu) {
+            std::lock_guard<std::mutex> lock(g_gpu_mutex);
+            if (!g_gpu) g_gpu = std::make_unique<aperture_gpu::Miner>(g_gpu_device, uw.rank, g_model->Ops());
+            if (g_gpu_inputs != &uw) {
+                g_gpu->SetInputs(inputs);
+                g_gpu_inputs = &uw;
+            }
+            const auto path{uw.rank == 32 ? aperture_gpu::TilePath::TENSOR_CORE : aperture_gpu::TilePath::PORTABLE};
+            found = g_gpu->Search(sigma, target_le.begin(), path, hit, tickets);
+        } else
+#endif
+        {
+            found = matmulpow_v2::SearchNonce(g_backend, sigma, uw.rank, g_model->Ops(), inputs, target_le.begin(), hit, tickets);
+        }
         g_hashes += tickets;
         if (!found) continue;
         uint64_t solved{g_solved_generation.load()};
@@ -467,7 +493,7 @@ void Usage()
                  "  -dim      ApertureMatMul matrix dimension: 512 (main/test), 32 (regtest)\n"
                  "  -payout   scriptPubKey for the reward (default: OP_TRUE, for testing only)\n"
                  "  -protocolmodel=<file.apm> / -tinymodel   protocol model for ApertureMatMul v2 templates\n"
-                 "  -kernel=scalar|avx512-vnni   v2 mining kernel (default: fastest available)\n";
+                 "  -kernel=scalar|avx512-vnni|cuda   v2 mining kernel (default: fastest CPU kernel)\n";
 }
 
 } // namespace
@@ -501,6 +527,20 @@ int main(int argc, char** argv)
             opt.model_path = val;
         } else if (key == "-tinymodel") {
             opt.tiny_model = true;
+        } else if (key == "-kernel" && val == "cuda") {
+#ifdef APERTURE_CUDA
+            const auto devices{aperture_gpu::Devices()};
+            if (devices.empty()) {
+                std::cerr << "-kernel=cuda: no GPU device\n";
+                return 1;
+            }
+            g_use_gpu = true;
+            opt.threads = 1; // the GPU is fed by one thread
+            std::cout << "GPU " << devices[0].name << std::endl;
+#else
+            std::cerr << "-kernel=cuda: built without CUDA (configure sv2-tp with -DAPERTURE_CUDA=ON)\n";
+            return 1;
+#endif
         } else if (key == "-kernel") {
             g_backend = val == "scalar" ? matmulpow_v2::Backend::SCALAR : matmulpow_v2::Backend::AVX512_VNNI;
             if (!matmulpow_v2::BackendAvailable(g_backend)) {

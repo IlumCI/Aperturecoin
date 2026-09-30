@@ -28,7 +28,7 @@ git -C "${WORK}" clean --quiet -fdx -e build
 git -C "${WORK}" apply "${HERE}"/patches/*.patch
 cp -R "${HERE}/overlay/." "${WORK}/"
 
-cmake -S "${WORK}" -B "${WORK}/build" -DAPERTURE_SRC="${APERTURE_SRC}" -DWITH_CCACHE=OFF -DBUILD_TESTS=ON
+cmake -S "${WORK}" -B "${WORK}/build" -DAPERTURE_SRC="${APERTURE_SRC}" -DWITH_CCACHE=OFF -DBUILD_TESTS=ON ${CMAKE_ARGS:-}
 cmake --build "${WORK}/build" -j"$(nproc 2>/dev/null || echo 4)" --target sv2-tp aperture-sv2-miner test_sv2
 
 echo
