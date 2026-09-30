@@ -127,11 +127,6 @@ enum BlockStatus: uint32_t {
     BLOCK_FAILED_MASK        =   BLOCK_FAILED_VALID | BLOCK_FAILED_CHILD,
 
     BLOCK_OPT_WITNESS       =   128, //!< block data in blk*.data was received with a witness-enforcing client
-
-    BLOCK_HAVE_MWEB         =   (1 << 28),
-
-    //! A mutated serialization was discarded, but validated transaction metadata is retained.
-    BLOCK_DISCARDED_MUTATED_DATA = (1 << 29)
 };
 
 /** The block chain is a tree shaped structure starting with the
@@ -187,11 +182,6 @@ public:
     //! ApertureMatMul v2 header extension (empty unless nVersion has VERSION_POWV2).
     //! Kept in memory with the index; r x 256 bytes per block (doc/pouw-v2.md).
     PowV2Proof powv2;
-
-    //! MWEB data (only populated when BLOCK_HAVE_MWEB is set)
-    mw::Header::CPtr mweb_header{nullptr};
-    uint256 hogex_hash{};
-    CAmount mweb_amount{0};
 
     //! (memory only) Sequential id assigned to distinguish order in which blocks are received.
     int32_t nSequenceId{0};
@@ -361,12 +351,6 @@ public:
         if (obj.nStatus & (BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO)) READWRITE(VARINT_MODE(obj.nFile, VarIntMode::NONNEGATIVE_SIGNED));
         if (obj.nStatus & BLOCK_HAVE_DATA) READWRITE(VARINT(obj.nDataPos));
         if (obj.nStatus & BLOCK_HAVE_UNDO) READWRITE(VARINT(obj.nUndoPos));
-		
-        if (obj.nStatus & BLOCK_HAVE_MWEB) {
-            READWRITE(obj.mweb_header);
-            READWRITE(obj.hogex_hash);
-            READWRITE(VARINT_MODE(obj.mweb_amount, VarIntMode::NONNEGATIVE_SIGNED));
-        }
 
         // block header
         READWRITE(obj.nVersion);

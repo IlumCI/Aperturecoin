@@ -30,9 +30,6 @@ class CFeeRate
 {
 private:
     CAmount nSatoshisPerK; // unit is satoshis-per-1,000-bytes
-    CAmount m_nFeePaid;
-    size_t m_nBytes;
-    uint64_t m_weight;
 
 public:
     /** Fee rate of 0 satoshis per kB */
@@ -52,25 +49,15 @@ public:
      *  @param[in] nBytes    size_t bytes (units) to construct with
      *  @returns   fee rate
      */
-    CFeeRate(const CAmount& nFeePaid, size_t nBytes_, uint64_t mweb_weight);
+    CFeeRate(const CAmount& nFeePaid, size_t nBytes);
     /**
      * Return the fee in satoshis for the given size in bytes.
      */
-    CAmount GetFee(size_t nBytes_) const;
-    /**
-     * Return the fee in satoshis for the given MWEB weight.
-     */
-    CAmount GetMWEBFee(uint64_t mweb_weight) const;
-    /**
-     * Return the fee in satoshis for the given size in bytes & MWEB weight.
-     */
-    CAmount GetTotalFee(size_t nBytes, uint64_t mweb_weight) const;
+    CAmount GetFee(size_t nBytes) const;
     /**
      * Return the fee in satoshis for a size of 1000 bytes
      */
     CAmount GetFeePerK() const { return GetFee(1000); }
-
-    bool MeetsFeePerK(const CAmount& min_fee_per_k) const;
 
     friend bool operator<(const CFeeRate& a, const CFeeRate& b) { return a.nSatoshisPerK < b.nSatoshisPerK; }
     friend bool operator>(const CFeeRate& a, const CFeeRate& b) { return a.nSatoshisPerK > b.nSatoshisPerK; }

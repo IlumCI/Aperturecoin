@@ -13,7 +13,6 @@
 #include <primitives/token.h>
 
 #include <consensus/validation.h>
-#include <mweb/mweb_policy.h>
 #include <coins.h>
 #include <span.h>
 
@@ -122,16 +121,10 @@ bool IsStandardTx(const CTransaction& tx, bool permit_bare_multisig, const CFeeR
         }
     }
 
-    // MWEB: Also check pegout scripts
-    std::vector<CTxOut> txouts = tx.vout;
-    for (const PegOutCoin& pegout : tx.mweb_tx.GetPegOuts()) {
-        txouts.push_back(CTxOut(pegout.GetAmount(), pegout.GetScriptPubKey()));
-    }
-
     unsigned int nDataOut = 0;
     unsigned int nRequestOut = 0;
     TxoutType whichType;
-    for (const CTxOut& txout : txouts) {
+    for (const CTxOut& txout : tx.vout) {
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
             reason = "scriptpubkey";
             return false;
@@ -160,11 +153,6 @@ bool IsStandardTx(const CTransaction& tx, bool permit_bare_multisig, const CFeeR
     // only one OP_RETURN txout is permitted
     if (nDataOut > 1) {
         reason = "multi-op-return";
-        return false;
-    }
-
-    // MWEB: Check MWEB standard transaction policies
-    if (!MWEB::Policy::IsStandardTx(tx, reason)) {
         return false;
     }
 

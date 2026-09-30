@@ -28,7 +28,6 @@ UniValue GbtRequest()
 {
     UniValue rules(UniValue::VARR);
     rules.push_back("segwit");
-    rules.push_back("mweb");
     UniValue request(UniValue::VOBJ);
     request.pushKV("rules", rules);
     UniValue params(UniValue::VARR);
@@ -360,7 +359,6 @@ bool RpcMining::checkBlock(const CBlock& block, const node::BlockCheckOptions&, 
     request.pushKV("data", SerializeBlockHex(block));
     UniValue rules(UniValue::VARR);
     rules.push_back("segwit");
-    rules.push_back("mweb");
     request.pushKV("rules", rules);
     UniValue params(UniValue::VARR);
     params.push_back(request);

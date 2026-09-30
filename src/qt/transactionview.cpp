@@ -13,6 +13,7 @@
 #include <qt/platformstyle.h>
 #include <qt/transactiondescdialog.h>
 #include <qt/transactionfilterproxy.h>
+#include <qt/transactionrecord.h>
 #include <qt/transactiontablemodel.h>
 #include <qt/walletmodel.h>
 
@@ -82,13 +83,13 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     }
 
     typeWidget->addItem(tr("All"), TransactionFilterProxy::ALL_TYPES);
-    typeWidget->addItem(tr("Received with"), TransactionFilterProxy::TYPE(WalletTxRecord::RecvWithAddress) |
-                                        TransactionFilterProxy::TYPE(WalletTxRecord::RecvFromOther));
-    typeWidget->addItem(tr("Sent to"), TransactionFilterProxy::TYPE(WalletTxRecord::SendToAddress) |
-                                  TransactionFilterProxy::TYPE(WalletTxRecord::SendToOther));
-    typeWidget->addItem(tr("To yourself"), TransactionFilterProxy::TYPE(WalletTxRecord::SendToSelf));
-    typeWidget->addItem(tr("Mined"), TransactionFilterProxy::TYPE(WalletTxRecord::Generated));
-    typeWidget->addItem(tr("Other"), TransactionFilterProxy::TYPE(WalletTxRecord::Other));
+    typeWidget->addItem(tr("Received with"), TransactionFilterProxy::TYPE(TransactionRecord::RecvWithAddress) |
+                                        TransactionFilterProxy::TYPE(TransactionRecord::RecvFromOther));
+    typeWidget->addItem(tr("Sent to"), TransactionFilterProxy::TYPE(TransactionRecord::SendToAddress) |
+                                  TransactionFilterProxy::TYPE(TransactionRecord::SendToOther));
+    typeWidget->addItem(tr("To yourself"), TransactionFilterProxy::TYPE(TransactionRecord::SendToSelf));
+    typeWidget->addItem(tr("Mined"), TransactionFilterProxy::TYPE(TransactionRecord::Generated));
+    typeWidget->addItem(tr("Other"), TransactionFilterProxy::TYPE(TransactionRecord::Other));
 
     hlayout->addWidget(typeWidget);
 
@@ -151,7 +152,6 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     abandonAction = new QAction(tr("Abandon transaction"), this);
     bumpFeeAction = new QAction(tr("Increase transaction fee"), this);
     bumpFeeAction->setObjectName("bumpFeeAction");
-    rebroadcastAction = new QAction(tr("Rebroadcast transaction"), this);
     copyAddressAction = new QAction(tr("Copy address"), this);
     copyLabelAction = new QAction(tr("Copy label"), this);
     QAction *copyAmountAction = new QAction(tr("Copy amount"), this);
@@ -173,7 +173,6 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     contextMenu->addSeparator();
     contextMenu->addAction(bumpFeeAction);
     contextMenu->addAction(abandonAction);
-    contextMenu->addAction(rebroadcastAction);
     contextMenu->addAction(editLabelAction);
 
     connect(dateWidget, static_cast<void (QComboBox::*)(int)>(&QComboBox::activated), this, &TransactionView::chooseDate);
@@ -189,7 +188,6 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
 
     connect(bumpFeeAction, &QAction::triggered, this, &TransactionView::bumpFee);
     connect(abandonAction, &QAction::triggered, this, &TransactionView::abandonTx);
-    connect(rebroadcastAction, &QAction::triggered, this, &TransactionView::rebroadcastTx);
     connect(copyAddressAction, &QAction::triggered, this, &TransactionView::copyAddress);
     connect(copyLabelAction, &QAction::triggered, this, &TransactionView::copyLabel);
     connect(copyAmountAction, &QAction::triggered, this, &TransactionView::copyAmount);
@@ -397,7 +395,6 @@ void TransactionView::contextualMenu(const QPoint &point)
     hash.SetHex(selection.at(0).data(TransactionTableModel::TxHashRole).toString().toStdString());
     abandonAction->setEnabled(model->wallet().transactionCanBeAbandoned(hash));
     bumpFeeAction->setEnabled(model->wallet().transactionCanBeBumped(hash));
-    rebroadcastAction->setEnabled(model->wallet().transactionCanBeRebroadcast(hash));
     copyAddressAction->setEnabled(GUIUtil::hasEntryData(transactionView, 0, TransactionTableModel::AddressRole));
     copyLabelAction->setEnabled(GUIUtil::hasEntryData(transactionView, 0, TransactionTableModel::LabelRole));
 
@@ -445,21 +442,6 @@ void TransactionView::bumpFee()
         qApp->processEvents();
         Q_EMIT bumpedFee(newHash);
     }
-}
-
-void TransactionView::rebroadcastTx()
-{
-    if (!transactionView || !transactionView->selectionModel())
-        return;
-    QModelIndexList selection = transactionView->selectionModel()->selectedRows(0);
-
-    // get the hash from the TxHashRole (QVariant / QString)
-    uint256 hash;
-    QString hashQStr = selection.at(0).data(TransactionTableModel::TxHashRole).toString();
-    hash.SetHex(hashQStr.toStdString());
-
-    // Rebroadcast the wallet transaction over the walletModel
-    model->wallet().rebroadcastTransaction(hash);
 }
 
 void TransactionView::copyAddress()

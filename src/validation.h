@@ -183,14 +183,6 @@ CTransactionRef GetTransaction(const CBlockIndex* const block_index, const CTxMe
  */
 bool ActivateBestChain(BlockValidationState& state, const CChainParams& chainparams, std::shared_ptr<const CBlock> pblock = std::shared_ptr<const CBlock>());
 
-/**
- * Make the provided index the tip of the chain, regardless of the amount of work.
- * 
- * Unlike ActivateBestChain, this only updates the provided coins view, not the active chain state.
- * No calls to any validationinterface callbacks will be made.
- */
-bool ActivateArbitraryChain(BlockValidationState& state, CCoinsViewCache& view, const CChainParams& chainparams, CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams);
 /** Minimum amount the coinbase at nHeight must pay to the development fund script. */
 CAmount GetDevFundAmount(int nHeight, const Consensus::Params& consensusParams);
@@ -316,9 +308,6 @@ bool TestBlockValidity(BlockValidationState& state, const CChainParams& chainpar
 /** Check whether witness commitments are required for a block, and whether to enforce NULLDUMMY (BIP 147) rules.
  *  Note that transaction witness validation rules are always enforced when P2SH is enforced. */
 bool IsWitnessEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
-
-/** Check whether MWEB (LIPs 002-004) has activated. */
-bool IsMWEBEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params);
 
 /** Update uncommitted block structures (currently: only the witness reserved value). This is safe for submitted blocks. */
 void UpdateUncommittedBlockStructures(CBlock& block, const CBlockIndex* pindexPrev, const Consensus::Params& consensusParams);
@@ -706,9 +695,6 @@ public:
     /** Check whether we are doing an initial block download (synchronizing from disk or network) */
     bool IsInitialBlockDownload() const;
 
-    /** Check whether MWEB has been activated */
-    bool IsMWEBActive() const;
-
     /**
      * Make various assertions about the state of the block index.
      *
@@ -745,8 +731,8 @@ private:
 
     bool RollforwardBlock(const CBlockIndex* pindex, CCoinsViewCache& inputs, const CChainParams& params) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
-    //! Mark a block as not having block data.
-    void EraseBlockData(CBlockIndex* index, bool preserve_tx_metadata = false) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    //! Mark a block as not having block data
+    void EraseBlockData(CBlockIndex* index) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     friend ChainstateManager;
 };

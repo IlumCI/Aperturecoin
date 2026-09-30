@@ -70,7 +70,7 @@ void TestAddAddressesToSendBook(interfaces::Node& node)
         CKey key;
         key.MakeNewKey(true);
         CTxDestination dest(GetDestinationForKey(
-            key.GetPubKey(), wallet->m_default_address_type, wallet->GetLegacyScriptPubKeyMan()->GetScanSecret()));
+            key.GetPubKey(), wallet->m_default_address_type));
 
         return std::make_pair(dest, QString::fromStdString(EncodeDestination(dest)));
     };

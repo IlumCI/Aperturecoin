@@ -6,7 +6,6 @@
 #define BITCOIN_QT_COINCONTROLDIALOG_H
 
 #include <amount.h>
-#include <wallet/coinselection.h>
 
 #include <QAbstractButton>
 #include <QAction>
@@ -67,12 +66,6 @@ private:
 
     const PlatformStyle *platformStyle;
 
-    CInputCoin BuildInputCoin(QTreeWidgetItem* item);
-    OutputIndex BuildOutputIndex(QTreeWidgetItem* item);
-
-    bool IsMWEB(QTreeWidgetItem* item);
-    bool IsCanonical(QTreeWidgetItem* item);
-
     void sortView(int, Qt::SortOrder);
     void updateView();
 
@@ -89,9 +82,7 @@ private:
     enum
     {
         TxHashRole = Qt::UserRole,
-        VOutRole,
-        PubKeyRole,
-        MWEBOutRole
+        VOutRole
     };
 
     friend class CCoinControlWidgetItem;

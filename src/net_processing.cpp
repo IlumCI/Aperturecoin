@@ -14,7 +14,6 @@
 #include <hash.h>
 #include <index/blockfilterindex.h>
 #include <merkleblock.h>
-#include <mw/mmr/Segment.h>
 #include <netbase.h>
 #include <netmessagemaker.h>
 #include <policy/fees.h>
@@ -103,16 +102,6 @@ static const unsigned int MAX_HEADERS_RESULTS = 2000;
 static const int MAX_CMPCTBLOCK_DEPTH = 5;
 /** Maximum depth of blocks we're willing to respond to GETBLOCKTXN requests for. */
 static const int MAX_BLOCKTXN_DEPTH = 10;
-/** Maximum depth of blocks we're willing to serve MWEB leafsets for. */
-static const int MAX_MWEB_LEAFSET_DEPTH = 10;
-/** Maximum number of MWEB UTXOs that can be requested in a batch. */
-static const uint16_t MAX_REQUESTED_MWEB_UTXOS = 4096;
-/** Serving an MWEB leafset/UTXO request rewinds and replays up to MAX_MWEB_LEAFSET_DEPTH blocks under cs_main,
- *  so each request is expensive. Rate-limit these across the node to bound the CPU peers can force, including
- *  by reconnecting. Values are deliberately conservative: a small burst, refilled slowly.
- *  These messages are only used by external light clients, so throttling does not affect the node's own operation. */
-static constexpr double MWEB_SERVE_MAX_TOKENS{32.0};
-static constexpr double MWEB_SERVE_REFILL_PER_SECOND{0.5};
 /** Size of the "block download window": how far ahead of our current height do we fetch?
  *  Larger windows tolerate larger download speed differences between peer, but increase the potential
  *  degree of disordering of blocks on disk (which make reindexing and pruning harder). We'll probably
@@ -345,28 +334,13 @@ struct CNodeState {
     bool fProvidesHeaderAndIDs;
     //! Whether this peer can give us witnesses
     bool fHaveWitness;
-    //! Whether this peer can give us MWEB data
-    bool fHaveMWEB;
     //! Whether this peer wants witnesses in cmpctblocks/blocktxns
     bool fWantsCmpctWitness;
-    //! Whether this peer wants MWEB transactions in cmpctblocks/blocktxns
-    bool fWantsCmpctMWEB;
     /**
      * If we've announced NODE_WITNESS to this peer: whether the peer sends witnesses in cmpctblocks/blocktxns,
      * otherwise: whether this peer sends non-witnesses in cmpctblocks/blocktxns.
      */
     bool fSupportsDesiredCmpctVersion;
-
-    int GetCmpctBlockVersion()
-    {
-        if (fWantsCmpctMWEB) {
-            return 3;
-        } else if (fWantsCmpctWitness) {
-            return 2;
-        } else {
-            return 1;
-        }
-    }
 
     /** State used to enforce CHAIN_SYNC_TIMEOUT and EXTRA_PEER_CHECK_INTERVAL logic.
       *
@@ -440,9 +414,7 @@ struct CNodeState {
         fPreferHeaderAndIDs = false;
         fProvidesHeaderAndIDs = false;
         fHaveWitness = false;
-        fHaveMWEB = false;
         fWantsCmpctWitness = false;
-        fWantsCmpctMWEB = false;
         fSupportsDesiredCmpctVersion = false;
         m_chain_sync = { 0, nullptr, false, false };
         m_last_block_announcement = 0;
@@ -606,12 +578,9 @@ static bool MarkBlockAsInFlight(CTxMemPool& mempool, NodeId nodeid, const uint25
 
     // Make sure it's not listed somewhere already.
     MarkBlockAsReceived(hash, nullopt);
-    MWEB::Block mweb_block;
-    if (pit && (*pit)) {
-        mweb_block = (*(*pit))->partialBlock->mweb_block;
-    }
+
     std::list<QueuedBlock>::iterator it = state->vBlocksInFlight.insert(state->vBlocksInFlight.end(),
-            {hash, pindex, pindex != nullptr, std::unique_ptr<PartiallyDownloadedBlock>(pit ? new PartiallyDownloadedBlock(&mempool, mweb_block) : nullptr)});
+            {hash, pindex, pindex != nullptr, std::unique_ptr<PartiallyDownloadedBlock>(pit ? new PartiallyDownloadedBlock(&mempool) : nullptr)});
     state->nBlocksInFlight++;
     state->nBlocksInFlightValidHeaders += it->fValidatedHeaders;
     if (state->nBlocksInFlight == 1) {
@@ -686,7 +655,7 @@ static void MaybeSetPeerAsAnnouncingHeaderAndIDs(NodeId nodeid, CConnman& connma
         }
         connman.ForNode(nodeid, [&connman](CNode* pfrom) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
             AssertLockHeld(::cs_main);
-            uint64_t nCMPCTBLOCKVersion = State(pfrom->GetId())->GetCmpctBlockVersion();
+            uint64_t nCMPCTBLOCKVersion = (pfrom->GetLocalServices() & NODE_WITNESS) ? 2 : 1;
             if (lNodesAnnouncingHeaderAndIDs.size() >= 3) {
                 // As per BIP152, we only get 3 of our peers to announce
                 // blocks using compact encodings.
@@ -788,10 +757,6 @@ static void FindNextBlocksToDownload(NodeId nodeid, unsigned int count, std::vec
             }
             if (!State(nodeid)->fHaveWitness && IsWitnessEnabled(pindex->pprev, consensusParams)) {
                 // We wouldn't download this block or its descendants from this peer.
-                return;
-            }
-            if (!State(nodeid)->fHaveMWEB && IsMWEBEnabled(pindex->pprev, consensusParams)) {
-                // MWEB: Can't download this block from this peer.
                 return;
             }
             if (pindex->nStatus & BLOCK_HAVE_DATA || ::ChainActive().Contains(pindex)) {
@@ -1131,21 +1096,8 @@ bool PeerManager::MaybePunishNodeForBlock(NodeId nodeid, const BlockValidationSt
     case BlockValidationResult::BLOCK_RESULT_UNSET:
         break;
     // The node is providing invalid data:
-    case BlockValidationResult::BLOCK_MUTATED:
-        // BIP 152 permits compact-block peers to forward blocks after checking
-        // only the header. MWEB block bodies are not committed to by that
-        // header, however, so accepting bad MWEB bodies from compact-block
-        // peers without penalty permits their expensive validation to be
-        // replayed indefinitely.
-        if (!via_compact_block ||
-            state.GetRejectReason() == "bad-blk-mweb" ||
-            state.GetRejectReason() == "bad-mweb-empty-pegout" ||
-            state.GetRejectReason() == "bad-mweb-empty-extradata") {
-            Misbehaving(nodeid, 100, message);
-            return true;
-        }
-        break;
     case BlockValidationResult::BLOCK_CONSENSUS:
+    case BlockValidationResult::BLOCK_MUTATED:
         if (!via_compact_block) {
             Misbehaving(nodeid, 100, message);
             return true;
@@ -1344,7 +1296,6 @@ static std::shared_ptr<const CBlock> most_recent_block GUARDED_BY(cs_most_recent
 static std::shared_ptr<const CBlockHeaderAndShortTxIDs> most_recent_compact_block GUARDED_BY(cs_most_recent_block);
 static uint256 most_recent_block_hash GUARDED_BY(cs_most_recent_block);
 static bool fWitnessesPresentInMostRecentCompactBlock GUARDED_BY(cs_most_recent_block);
-static bool fMWEBPresentInMostRecentCompactBlock GUARDED_BY(cs_most_recent_block);
 
 /**
  * Maintain state about the best-seen block and fast-announce a compact block
@@ -1362,7 +1313,6 @@ void PeerManager::NewPoWValidBlock(const CBlockIndex *pindex, const std::shared_
     nHighestFastAnnounce = pindex->nHeight;
 
     bool fWitnessEnabled = IsWitnessEnabled(pindex->pprev, m_chainparams.GetConsensus());
-    bool mweb_enabled = IsMWEBEnabled(pindex->pprev, m_chainparams.GetConsensus());
     uint256 hashBlock(pblock->GetHash());
 
     {
@@ -1371,10 +1321,9 @@ void PeerManager::NewPoWValidBlock(const CBlockIndex *pindex, const std::shared_
         most_recent_block = pblock;
         most_recent_compact_block = pcmpctblock;
         fWitnessesPresentInMostRecentCompactBlock = fWitnessEnabled;
-        fMWEBPresentInMostRecentCompactBlock = mweb_enabled;
     }
 
-    m_connman.ForEachNode([this, &pcmpctblock, pindex, &msgMaker, fWitnessEnabled, mweb_enabled, &hashBlock](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+    m_connman.ForEachNode([this, &pcmpctblock, pindex, &msgMaker, fWitnessEnabled, &hashBlock](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
         AssertLockHeld(::cs_main);
 
         // TODO: Avoid the repeated-serialization here
@@ -1385,17 +1334,11 @@ void PeerManager::NewPoWValidBlock(const CBlockIndex *pindex, const std::shared_
         // If the peer has, or we announced to them the previous block already,
         // but we don't think they have this one, go ahead and announce it
         if (state.fPreferHeaderAndIDs && (!fWitnessEnabled || state.fWantsCmpctWitness) &&
-                (!mweb_enabled || state.fWantsCmpctMWEB) &&
                 !PeerHasHeader(&state, pindex) && PeerHasHeader(&state, pindex->pprev)) {
-
-            bool fPeerWantsWitness = State(pnode->GetId())->fWantsCmpctWitness;
-            bool fPeerWantsMWEB = State(pnode->GetId())->fWantsCmpctMWEB;
-            int nSendFlags = fPeerWantsWitness ? 0 : SERIALIZE_TRANSACTION_NO_WITNESS;
-            nSendFlags |= fPeerWantsMWEB ? 0 : SERIALIZE_NO_MWEB;
 
             LogPrint(BCLog::NET, "%s sending header-and-ids %s to peer=%d\n", "PeerManager::NewPoWValidBlock",
                     hashBlock.ToString(), pnode->GetId());
-            m_connman.PushMessage(pnode, msgMaker.Make(nSendFlags, NetMsgType::CMPCTBLOCK, *pcmpctblock));
+            m_connman.PushMessage(pnode, msgMaker.Make(NetMsgType::CMPCTBLOCK, *pcmpctblock));
             state.pindexBestHeaderSent = pindex;
         }
     });
@@ -1507,23 +1450,6 @@ bool static AlreadyHaveTx(const GenTxid& gtxid, const CTxMemPool& mempool) EXCLU
     return recentRejects->contains(hash) || mempool.exists(gtxid);
 }
 
-/**
- * Return true when a transaction's txid/wtxid can identify a different MWEB
- * relay payload. MWEB data and the HogEx marker are excluded from both hashes.
- * A pegin with its required MWEB body stripped must also be classified here,
- * even though HasMWEBTx() is false for that invalid relay variant.
- */
-bool static HasUncommittedMWEBPayload(const CTransaction& tx)
-{
-    if (tx.HasMWEBTx() || tx.IsHogEx()) return true;
-
-    for (const CTxOut& txout : tx.vout) {
-        if (txout.scriptPubKey.IsMWEBPegin()) return true;
-    }
-
-    return false;
-}
-
 bool static AlreadyHaveBlock(const uint256& block_hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     return LookupBlockIndex(block_hash) != nullptr;
@@ -1583,8 +1509,20 @@ static void RelayAddress(const CAddress& addr, bool fReachable, const CConnman& 
     connman.ForEachNodeThen(std::move(sortfunc), std::move(pushfunc));
 }
 
-static void ActivateBestChainIfNeeded(const CChainParams& chainparams, const CInv& inv)
+void static ProcessGetBlockData(CNode& pfrom, const CChainParams& chainparams, const CInv& inv, CConnman& connman)
 {
+    bool send = false;
+    std::shared_ptr<const CBlock> a_recent_block;
+    std::shared_ptr<const CBlockHeaderAndShortTxIDs> a_recent_compact_block;
+    bool fWitnessesPresentInARecentCompactBlock;
+    const Consensus::Params& consensusParams = chainparams.GetConsensus();
+    {
+        LOCK(cs_most_recent_block);
+        a_recent_block = most_recent_block;
+        a_recent_compact_block = most_recent_compact_block;
+        fWitnessesPresentInARecentCompactBlock = fWitnessesPresentInMostRecentCompactBlock;
+    }
+
     bool need_activate_chain = false;
     {
         LOCK(cs_main);
@@ -1601,40 +1539,12 @@ static void ActivateBestChainIfNeeded(const CChainParams& chainparams, const CIn
             }
         }
     } // release cs_main before calling ActivateBestChain
-
     if (need_activate_chain) {
-        // Grab the current most_recent_block and pass it to ActivateBestChain
-        // which hopefully will prevent needing to load blocks from disk.
-        std::shared_ptr<const CBlock> a_recent_block;
-        {
-            LOCK(cs_most_recent_block);
-            a_recent_block = most_recent_block;
-        }
-
         BlockValidationState state;
         if (!ActivateBestChain(state, chainparams, a_recent_block)) {
             LogPrint(BCLog::NET, "failed to activate chain (%s)\n", state.ToString());
         }
     }
-}
-
-void static ProcessGetBlockData(CNode& pfrom, const CChainParams& chainparams, const CInv& inv, CConnman& connman)
-{
-    bool send = false;
-    std::shared_ptr<const CBlock> a_recent_block;
-    std::shared_ptr<const CBlockHeaderAndShortTxIDs> a_recent_compact_block;
-    bool fWitnessesPresentInARecentCompactBlock;
-    bool fMWEBPresentInARecentCompactBlock;
-    const Consensus::Params& consensusParams = chainparams.GetConsensus();
-    {
-        LOCK(cs_most_recent_block);
-        a_recent_block = most_recent_block;
-        a_recent_compact_block = most_recent_compact_block;
-        fWitnessesPresentInARecentCompactBlock = fWitnessesPresentInMostRecentCompactBlock;
-        fMWEBPresentInARecentCompactBlock = fMWEBPresentInMostRecentCompactBlock;
-    }
-
-    ActivateBestChainIfNeeded(chainparams, inv);
 
     LOCK(cs_main);
     const CBlockIndex* pindex = LookupBlockIndex(inv.hash);
@@ -1674,7 +1584,7 @@ void static ProcessGetBlockData(CNode& pfrom, const CChainParams& chainparams, c
         std::shared_ptr<const CBlock> pblock;
         if (a_recent_block && a_recent_block->GetHash() == pindex->GetBlockHash()) {
             pblock = a_recent_block;
-        } else if (inv.IsMsgMWEBBlk()) {
+        } else if (inv.IsMsgWitnessBlk()) {
             // Fast-path: in this case it is possible to serve the block directly from disk,
             // as the network format matches the format on disk
             std::vector<uint8_t> block_data;
@@ -1692,10 +1602,8 @@ void static ProcessGetBlockData(CNode& pfrom, const CChainParams& chainparams, c
         }
         if (pblock) {
             if (inv.IsMsgBlk()) {
-                connman.PushMessage(&pfrom, msgMaker.Make(SERIALIZE_TRANSACTION_NO_WITNESS | SERIALIZE_NO_MWEB, NetMsgType::BLOCK, *pblock));
+                connman.PushMessage(&pfrom, msgMaker.Make(SERIALIZE_TRANSACTION_NO_WITNESS, NetMsgType::BLOCK, *pblock));
             } else if (inv.IsMsgWitnessBlk()) {
-                connman.PushMessage(&pfrom, msgMaker.Make(SERIALIZE_NO_MWEB, NetMsgType::BLOCK, *pblock));
-            } else if (inv.IsMsgMWEBBlk()) {
                 connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::BLOCK, *pblock));
             } else if (inv.IsMsgFilteredBlk()) {
                 bool sendMerkleBlock = false;
@@ -1717,7 +1625,7 @@ void static ProcessGetBlockData(CNode& pfrom, const CChainParams& chainparams, c
                     // however we MUST always provide at least what the remote peer needs
                     typedef std::pair<unsigned int, uint256> PairType;
                     for (PairType& pair : merkleBlock.vMatchedTxn)
-                        connman.PushMessage(&pfrom, msgMaker.Make(SERIALIZE_TRANSACTION_NO_WITNESS | SERIALIZE_NO_MWEB, NetMsgType::TX, *pblock->vtx[pair.first]));
+                        connman.PushMessage(&pfrom, msgMaker.Make(SERIALIZE_TRANSACTION_NO_WITNESS, NetMsgType::TX, *pblock->vtx[pair.first]));
                 }
                 // else
                     // no response
@@ -1727,12 +1635,9 @@ void static ProcessGetBlockData(CNode& pfrom, const CChainParams& chainparams, c
                 // and we don't feel like constructing the object for them, so
                 // instead we respond with the full, non-compact block.
                 bool fPeerWantsWitness = State(pfrom.GetId())->fWantsCmpctWitness;
-                bool fPeerWantsMWEB = State(pfrom.GetId())->fWantsCmpctMWEB;
                 int nSendFlags = fPeerWantsWitness ? 0 : SERIALIZE_TRANSACTION_NO_WITNESS;
-                nSendFlags |= fPeerWantsMWEB ? 0 : SERIALIZE_NO_MWEB;
-
                 if (CanDirectFetch(consensusParams) && pindex->nHeight >= ::ChainActive().Height() - MAX_CMPCTBLOCK_DEPTH) {
-                    if ((fPeerWantsWitness || !fWitnessesPresentInARecentCompactBlock) && (fPeerWantsMWEB || !fMWEBPresentInARecentCompactBlock) && a_recent_compact_block && a_recent_compact_block->header.GetHash() == pindex->GetBlockHash()) {
+                    if ((fPeerWantsWitness || !fWitnessesPresentInARecentCompactBlock) && a_recent_compact_block && a_recent_compact_block->header.GetHash() == pindex->GetBlockHash()) {
                         connman.PushMessage(&pfrom, msgMaker.Make(nSendFlags, NetMsgType::CMPCTBLOCK, *a_recent_compact_block));
                     } else {
                         CBlockHeaderAndShortTxIDs cmpctblock(*pblock, fPeerWantsWitness);
@@ -1740,11 +1645,6 @@ void static ProcessGetBlockData(CNode& pfrom, const CChainParams& chainparams, c
                     }
                 } else {
                     connman.PushMessage(&pfrom, msgMaker.Make(nSendFlags, NetMsgType::BLOCK, *pblock));
-                }
-            } else if (inv.IsMsgMWEBHeader()) {
-                if (pblock->GetHogEx() != nullptr && !pblock->mweb_block.IsNull()) {
-                    CMerkleBlockWithMWEB merkle_block_with_mweb(*pblock);
-                    connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::MWEBHEADER, merkle_block_with_mweb));
                 }
             }
         }
@@ -1761,252 +1661,6 @@ void static ProcessGetBlockData(CNode& pfrom, const CChainParams& chainparams, c
             pfrom.hashContinue.SetNull();
         }
     }
-}
-
-struct MWEBLeafsetMsg
-{
-    MWEBLeafsetMsg() = default;
-    MWEBLeafsetMsg(uint256 block_hash_in, BitSet leafset_in)
-        : block_hash(std::move(block_hash_in)), leafset(std::move(leafset_in)) { }
-
-    SERIALIZE_METHODS(MWEBLeafsetMsg, obj) { READWRITE(obj.block_hash, obj.leafset); }
-
-    uint256 block_hash;
-    BitSet leafset;
-};
-
-/** Node-wide token-bucket rate limiter for expensive MWEB leafset/UTXO serving
- *  requests. Returns true (and consumes a token) if the request may be served
- *  now. Serving each request rewinds/replays up to MAX_MWEB_LEAFSET_DEPTH
- *  blocks under cs_main, so without this an unauthenticated peer could pin the
- *  node by flooding valid requests. */
-static bool AllowMWEBServe(CNode& pfrom) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    // Whitelisted peers (e.g. -whitelist / PF_NOBAN) are exempt.
-    if (pfrom.HasPermission(PF_NOBAN)) {
-        return true;
-    }
-
-    // This state is independent of CNodeState so reconnecting cannot reset the
-    // node-wide allowance.
-    static double node_tokens{MWEB_SERVE_MAX_TOKENS};
-    static std::chrono::microseconds node_timestamp{GetTime<std::chrono::microseconds>()};
-
-    const auto now = GetTime<std::chrono::microseconds>();
-    const auto node_time_diff = std::max(now - node_timestamp, std::chrono::microseconds{0});
-    node_tokens = std::min<double>(
-        node_tokens + Ticks<SecondsDouble>(node_time_diff) * MWEB_SERVE_REFILL_PER_SECOND,
-        MWEB_SERVE_MAX_TOKENS);
-    node_timestamp = now;
-
-    if (node_tokens < 1.0) {
-        return false;
-    }
-
-    node_tokens -= 1.0;
-    return true;
-}
-
-static void ProcessGetMWEBLeafset(CNode& pfrom, const ChainstateManager& chainman, const CChainParams& chainparams, const CInv& inv, CConnman& connman)
-{
-    ActivateBestChainIfNeeded(chainparams, inv);
-
-    LOCK(cs_main);
-    if (chainman.ActiveChainstate().IsInitialBlockDownload()) {
-        LogPrint(BCLog::NET, "Ignoring mweb leafset request from peer=%d because node is in initial block download\n", pfrom.GetId());
-        return;
-    }
-
-    CBlockIndex* pindex = LookupBlockIndex(inv.hash);
-    if (!pindex || !chainman.ActiveChain().Contains(pindex)) {
-        LogPrint(BCLog::NET, "Ignoring mweb leafset request from peer=%d because requested block hash is not in active chain\n", pfrom.GetId());
-        return;
-    }
-
-    // TODO: Add an outbound limit
-
-    // For performance reasons, we limit how many blocks can be undone in order to rebuild the leafset
-    if (chainman.ActiveChain().Tip()->nHeight - pindex->nHeight > MAX_MWEB_LEAFSET_DEPTH) {
-        LogPrint(BCLog::NET, "Ignore mweb leafset request below MAX_MWEB_LEAFSET_DEPTH threshold from peer=%d\n", pfrom.GetId());
-
-        // disconnect node and prevent it from stalling (would otherwise wait for the MWEB leafset)
-        if (!pfrom.HasPermission(PF_NOBAN)) {
-            pfrom.fDisconnect = true;
-        }
-
-        return;
-    }
-
-    // Pruned nodes may have deleted the block, so check whether it's available before trying to send.
-    if (!(pindex->nStatus & BLOCK_HAVE_DATA) || !(pindex->nStatus & BLOCK_HAVE_MWEB)) {
-        LogPrint(BCLog::NET, "Ignoring mweb leafset request from peer=%d because block is either pruned or lacking mweb data\n", pfrom.GetId());
-
-        if (!pfrom.HasPermission(PF_NOBAN)) {
-            pfrom.fDisconnect = true;
-        }
-        return;
-    }
-
-    // Rate-limit before the expensive rewind/replay below.
-    if (!AllowMWEBServe(pfrom)) {
-        LogPrint(BCLog::NET, "Rate-limiting mweb leafset request from peer=%d\n", pfrom.GetId());
-        return;
-    }
-
-    // Rewind leafset to block height
-    BlockValidationState state;
-    CCoinsViewCache temp_view(&chainman.ActiveChainstate().CoinsTip());
-    if (!ActivateArbitraryChain(state, temp_view, chainparams, pindex)) {
-        pfrom.fDisconnect = true;
-        return;
-    }
-
-    // Serve leafset to peer
-    MWEBLeafsetMsg leafset_msg(pindex->GetBlockHash(), temp_view.GetMWEBCacheView()->GetLeafSet()->ToBitSet());
-    connman.PushMessage(&pfrom, CNetMsgMaker(pfrom.GetCommonVersion()).Make(NetMsgType::MWEBLEAFSET, leafset_msg));
-}
-
-struct GetMWEBUTXOsMsg
-{
-    GetMWEBUTXOsMsg() = default;
-
-    SERIALIZE_METHODS(GetMWEBUTXOsMsg, obj)
-    {
-        READWRITE(obj.block_hash, COMPACTSIZE(obj.start_index), obj.num_requested, obj.output_format);
-    }
-
-    uint256 block_hash;
-    uint64_t start_index;
-    uint16_t num_requested;
-    uint8_t output_format;
-};
-
-struct MWEBUTXOsMsg
-{
-    MWEBUTXOsMsg() = default;
-
-    SERIALIZE_METHODS(MWEBUTXOsMsg, obj)
-    {
-        READWRITE(obj.block_hash, COMPACTSIZE(obj.start_index), obj.output_format, obj.utxos, obj.proof_hashes);
-    }
-
-    uint256 block_hash;
-    uint64_t start_index;
-    uint8_t output_format;
-    std::vector<NetUTXO> utxos;
-    std::vector<mw::Hash> proof_hashes;
-};
-
-static void ProcessGetMWEBUTXOs(CNode& pfrom, const ChainstateManager& chainman, const CChainParams& chainparams, CConnman& connman, const GetMWEBUTXOsMsg& get_utxos)
-{
-    if (get_utxos.num_requested > MAX_REQUESTED_MWEB_UTXOS) {
-        LogPrint(BCLog::NET, "getmwebutxos num_requested %u > %u, disconnect peer=%d\n", get_utxos.num_requested, MAX_REQUESTED_MWEB_UTXOS, pfrom.GetId());
-        if (!pfrom.HasPermission(PF_NOBAN)) {
-            pfrom.fDisconnect = true;
-        }
-        return;
-    }
-
-    static const std::set<uint8_t> supported_formats{
-        NetUTXO::HASH_ONLY,
-        NetUTXO::FULL_UTXO,
-        NetUTXO::COMPACT_UTXO};
-    if (supported_formats.count(get_utxos.output_format) == 0) {
-        LogPrint(BCLog::NET, "getmwebutxos output_format %u not supported, disconnect peer=%d\n", get_utxos.output_format, pfrom.GetId());
-        if (!pfrom.HasPermission(PF_NOBAN)) {
-            pfrom.fDisconnect = true;
-        }
-        return;
-    }
-
-    LOCK(cs_main);
-
-    if (chainman.ActiveChainstate().IsInitialBlockDownload()) {
-        LogPrint(BCLog::NET, "Ignoring getmwebutxos from peer=%d because node is in initial block download\n", pfrom.GetId());
-        return;
-    }
-
-    CBlockIndex* pindex = LookupBlockIndex(get_utxos.block_hash);
-    if (!pindex || !chainman.ActiveChain().Contains(pindex)) {
-        LogPrint(BCLog::NET, "Ignoring getmwebutxos from peer=%d because requested block hash is not in active chain\n", pfrom.GetId());
-        return;
-    }
-
-    // For performance reasons, we limit how many blocks can be undone in order to rebuild the leafset
-    if (chainman.ActiveChain().Tip()->nHeight - pindex->nHeight > MAX_MWEB_LEAFSET_DEPTH) {
-        LogPrint(BCLog::NET, "Ignore getmwebutxos below MAX_MWEB_LEAFSET_DEPTH threshold from peer=%d\n", pfrom.GetId());
-
-        if (!pfrom.HasPermission(PF_NOBAN)) {
-            pfrom.fDisconnect = true;
-        }
-
-        return;
-    }
-
-    // Pruned nodes may have deleted the block, so check whether it's available before trying to send.
-    if (!(pindex->nStatus & BLOCK_HAVE_DATA) || !(pindex->nStatus & BLOCK_HAVE_MWEB)) {
-        LogPrint(BCLog::NET, "Ignoring getmwebutxos request from peer=%d because block is either pruned or lacking mweb data\n", pfrom.GetId());
-
-        if (!pfrom.HasPermission(PF_NOBAN)) {
-            pfrom.fDisconnect = true;
-        }
-        return;
-    }
-
-    // Rate-limit before the expensive rewind/replay below.
-    if (!AllowMWEBServe(pfrom)) {
-        LogPrint(BCLog::NET, "Rate-limiting getmwebutxos request from peer=%d\n", pfrom.GetId());
-        return;
-    }
-
-    // Rewind leafset to block height
-    BlockValidationState state;
-    CCoinsViewCache temp_view(&chainman.ActiveChainstate().CoinsTip());
-    if (!ActivateArbitraryChain(state, temp_view, chainparams, pindex)) {
-        pfrom.fDisconnect = true;
-        return;
-    }
-
-    auto mweb_cache = temp_view.GetMWEBCacheView();
-
-    mmr::Segment segment = mmr::SegmentFactory::Assemble(
-        *mweb_cache->GetOutputPMMR(),
-        *mweb_cache->GetLeafSet(),
-        mmr::LeafIndex::At(get_utxos.start_index),
-        get_utxos.num_requested
-    );
-    if (segment.leaves.empty()) {
-        LogPrint(BCLog::NET, "Could not build segment requested by getmwebutxos from peer=%d\n", pfrom.GetId());
-        pfrom.fDisconnect = true;
-        return;
-    }
-
-    std::vector<NetUTXO> utxos;
-    utxos.reserve(segment.leaves.size());
-    for (const mmr::Leaf& leaf : segment.leaves) {
-        UTXO::CPtr utxo = mweb_cache->GetUTXO(leaf.vec());
-        if (!utxo) {
-            LogPrint(BCLog::NET, "Could not build segment requested by getmwebutxos from peer=%d\n", pfrom.GetId());
-            pfrom.fDisconnect = true;
-            return;
-        }
-
-        utxos.push_back(NetUTXO(get_utxos.output_format, utxo));
-    }
-
-    std::vector<mw::Hash> proof_hashes = segment.hashes;
-    if (segment.lower_peak) {
-        proof_hashes.push_back(*segment.lower_peak);
-    }
-
-    MWEBUTXOsMsg utxos_msg{
-        get_utxos.block_hash,
-        get_utxos.start_index,
-        get_utxos.output_format,
-        std::move(utxos),
-        std::move(proof_hashes)
-    };
-    connman.PushMessage(&pfrom, CNetMsgMaker(pfrom.GetCommonVersion()).Make(NetMsgType::MWEBUTXOS, utxos_msg));
 }
 
 //! Determine whether or not a peer can request a transaction, and return it (or nullptr if not found or not allowed).
@@ -2037,7 +1691,7 @@ static CTransactionRef FindTxForGetData(const CTxMemPool& mempool, const CNode& 
     return {};
 }
 
-void static ProcessGetData(CNode& pfrom, Peer& peer, const ChainstateManager& chainman, const CChainParams& chainparams, CConnman& connman, CTxMemPool& mempool, const std::atomic<bool>& interruptMsgProc) EXCLUSIVE_LOCKS_REQUIRED(!cs_main, peer.m_getdata_requests_mutex)
+void static ProcessGetData(CNode& pfrom, Peer& peer, const CChainParams& chainparams, CConnman& connman, CTxMemPool& mempool, const std::atomic<bool>& interruptMsgProc) EXCLUSIVE_LOCKS_REQUIRED(!cs_main, peer.m_getdata_requests_mutex)
 {
     AssertLockNotHeld(cs_main);
 
@@ -2069,7 +1723,7 @@ void static ProcessGetData(CNode& pfrom, Peer& peer, const ChainstateManager& ch
         CTransactionRef tx = FindTxForGetData(mempool, pfrom, ToGenTxid(inv), mempool_req, now);
         if (tx) {
             // WTX and WITNESS_TX imply we serialize with witness
-            int nSendFlags = (inv.IsMsgTx() ? SERIALIZE_TRANSACTION_NO_WITNESS | SERIALIZE_NO_MWEB : (State(pfrom.GetId())->fHaveMWEB ? 0 : SERIALIZE_NO_MWEB));
+            int nSendFlags = (inv.IsMsgTx() ? SERIALIZE_TRANSACTION_NO_WITNESS : 0);
             connman.PushMessage(&pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *tx));
             mempool.RemoveUnbroadcastTx(tx->GetHash());
             // As we're going to send tx, make sure its unconfirmed parents are made requestable.
@@ -2105,8 +1759,6 @@ void static ProcessGetData(CNode& pfrom, Peer& peer, const ChainstateManager& ch
         const CInv &inv = *it++;
         if (inv.IsGenBlkMsg()) {
             ProcessGetBlockData(pfrom, chainparams, inv, connman);
-        } else if (inv.IsMsgMWEBLeafset()) {
-            ProcessGetMWEBLeafset(pfrom, chainman, chainparams, inv, connman);
         }
         // else: If the first item on the queue is an unknown type, we erase it
         // and continue processing the queue on the next call.
@@ -2137,10 +1789,6 @@ static uint32_t GetFetchFlags(const CNode& pfrom) EXCLUSIVE_LOCKS_REQUIRED(cs_ma
     uint32_t nFetchFlags = 0;
     if ((pfrom.GetLocalServices() & NODE_WITNESS) && State(pfrom.GetId())->fHaveWitness) {
         nFetchFlags |= MSG_WITNESS_FLAG;
-
-        if ((pfrom.GetLocalServices() & NODE_MWEB) && State(pfrom.GetId())->fHaveMWEB) {
-            nFetchFlags |= MSG_MWEB_FLAG;
-        }
     }
     return nFetchFlags;
 }
@@ -2157,8 +1805,6 @@ void PeerManager::SendBlockTransactions(CNode& pfrom, const CBlock& block, const
     LOCK(cs_main);
     const CNetMsgMaker msgMaker(pfrom.GetCommonVersion());
     int nSendFlags = State(pfrom.GetId())->fWantsCmpctWitness ? 0 : SERIALIZE_TRANSACTION_NO_WITNESS;
-    nSendFlags |= State(pfrom.GetId())->fWantsCmpctMWEB ? 0 : SERIALIZE_NO_MWEB;
-
     m_connman.PushMessage(&pfrom, msgMaker.Make(nSendFlags, NetMsgType::BLOCKTXN, resp));
 }
 
@@ -2266,8 +1912,7 @@ void PeerManager::ProcessHeadersMessage(CNode& pfrom, const std::vector<CBlockHe
             while (pindexWalk && !::ChainActive().Contains(pindexWalk) && vToFetch.size() <= MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
                 if (!(pindexWalk->nStatus & BLOCK_HAVE_DATA) &&
                         !mapBlocksInFlight.count(pindexWalk->GetBlockHash()) &&
-                        (!IsWitnessEnabled(pindexWalk->pprev, m_chainparams.GetConsensus()) || State(pfrom.GetId())->fHaveWitness) &&
-                        (!IsMWEBEnabled(pindexWalk->pprev, m_chainparams.GetConsensus()) || State(pfrom.GetId())->fHaveMWEB)) {
+                        (!IsWitnessEnabled(pindexWalk->pprev, m_chainparams.GetConsensus()) || State(pfrom.GetId())->fHaveWitness)) {
                     // We don't have this block, and it's not yet in flight.
                     vToFetch.push_back(pindexWalk);
                 }
@@ -2413,9 +2058,7 @@ void PeerManager::ProcessOrphanTx(std::set<uint256>& orphan_work_set)
                 // for concerns around weakening security of unupgraded nodes
                 // if we start doing this too early.
                 assert(recentRejects);
-                if (!HasUncommittedMWEBPayload(*porphanTx)) {
-                    recentRejects->insert(porphanTx->GetWitnessHash());
-                }
+                recentRejects->insert(porphanTx->GetWitnessHash());
                 // If the transaction failed for TX_INPUTS_NOT_STANDARD,
                 // then we know that the witness was irrelevant to the policy
                 // failure, since this check depends only on the txid
@@ -2424,9 +2067,7 @@ void PeerManager::ProcessOrphanTx(std::set<uint256>& orphan_work_set)
                 // processing of this transaction in the event that child
                 // transactions are later received (resulting in
                 // parent-fetching by txid via the orphan-handling logic).
-                if (!HasUncommittedMWEBPayload(*porphanTx) &&
-                    state.GetResult() == TxValidationResult::TX_INPUTS_NOT_STANDARD &&
-                    porphanTx->GetWitnessHash() != porphanTx->GetHash()) {
+                if (state.GetResult() == TxValidationResult::TX_INPUTS_NOT_STANDARD && porphanTx->GetWitnessHash() != porphanTx->GetHash()) {
                     // We only add the txid if it differs from the wtxid, to
                     // avoid wasting entries in the rolling bloom filter.
                     recentRejects->insert(porphanTx->GetHash());
@@ -2785,10 +2426,6 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         {
             LOCK(cs_main);
             State(pfrom.GetId())->fHaveWitness = true;
-
-            if (nServices & NODE_MWEB) {
-                State(pfrom.GetId())->fHaveMWEB = true;
-            }
         }
 
         // Potentially mark this peer as a preferred download peer.
@@ -2911,10 +2548,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
             // We send this to non-NODE NETWORK peers as well, because
             // they may wish to request compact blocks from us
             bool fAnnounceUsingCMPCTBLOCK = false;
-            uint64_t nCMPCTBLOCKVersion = 3;
-            if (pfrom.GetLocalServices() & NODE_MWEB)
-                m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::SENDCMPCT, fAnnounceUsingCMPCTBLOCK, nCMPCTBLOCKVersion));
-            nCMPCTBLOCKVersion = 2;
+            uint64_t nCMPCTBLOCKVersion = 2;
             if (pfrom.GetLocalServices() & NODE_WITNESS)
                 m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::SENDCMPCT, fAnnounceUsingCMPCTBLOCK, nCMPCTBLOCKVersion));
             nCMPCTBLOCKVersion = 1;
@@ -3061,20 +2695,17 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         bool fAnnounceUsingCMPCTBLOCK = false;
         uint64_t nCMPCTBLOCKVersion = 0;
         vRecv >> fAnnounceUsingCMPCTBLOCK >> nCMPCTBLOCKVersion;
-        if (nCMPCTBLOCKVersion == 1 || ((pfrom.GetLocalServices() & NODE_WITNESS) && nCMPCTBLOCKVersion == 2) || ((pfrom.GetLocalServices() & NODE_MWEB) && nCMPCTBLOCKVersion == 3)) {
+        if (nCMPCTBLOCKVersion == 1 || ((pfrom.GetLocalServices() & NODE_WITNESS) && nCMPCTBLOCKVersion == 2)) {
             LOCK(cs_main);
             // fProvidesHeaderAndIDs is used to "lock in" version of compact blocks we send (fWantsCmpctWitness)
             if (!State(pfrom.GetId())->fProvidesHeaderAndIDs) {
                 State(pfrom.GetId())->fProvidesHeaderAndIDs = true;
-                State(pfrom.GetId())->fWantsCmpctWitness = nCMPCTBLOCKVersion >= 2;
-                State(pfrom.GetId())->fWantsCmpctMWEB = nCMPCTBLOCKVersion >= 3;
+                State(pfrom.GetId())->fWantsCmpctWitness = nCMPCTBLOCKVersion == 2;
             }
-            if (State(pfrom.GetId())->fWantsCmpctWitness == (nCMPCTBLOCKVersion >= 2) && State(pfrom.GetId())->fWantsCmpctMWEB == (nCMPCTBLOCKVersion >= 3))
+            if (State(pfrom.GetId())->fWantsCmpctWitness == (nCMPCTBLOCKVersion == 2)) // ignore later version announces
                 State(pfrom.GetId())->fPreferHeaderAndIDs = fAnnounceUsingCMPCTBLOCK;
             if (!State(pfrom.GetId())->fSupportsDesiredCmpctVersion) {
-                if (pfrom.GetLocalServices() & NODE_MWEB)
-                    State(pfrom.GetId())->fSupportsDesiredCmpctVersion = (nCMPCTBLOCKVersion == 3); 
-                else if (pfrom.GetLocalServices() & NODE_WITNESS)
+                if (pfrom.GetLocalServices() & NODE_WITNESS)
                     State(pfrom.GetId())->fSupportsDesiredCmpctVersion = (nCMPCTBLOCKVersion == 2);
                 else
                     State(pfrom.GetId())->fSupportsDesiredCmpctVersion = (nCMPCTBLOCKVersion == 1);
@@ -3175,7 +2806,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         {
             LOCK(peer->m_getdata_requests_mutex);
             peer->m_getdata_requests.insert(peer->m_getdata_requests.end(), vInv.begin(), vInv.end());
-            ProcessGetData(pfrom, *peer, m_chainman, m_chainparams, m_connman, m_mempool, interruptMsgProc);
+            ProcessGetData(pfrom, *peer, m_chainparams, m_connman, m_mempool, interruptMsgProc);
         }
 
         return;
@@ -3294,7 +2925,6 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         LogPrint(BCLog::NET, "Peer %d sent us a getblocktxn for a block > %i deep\n", pfrom.GetId(), MAX_BLOCKTXN_DEPTH);
         CInv inv;
         WITH_LOCK(cs_main, inv.type = State(pfrom.GetId())->fWantsCmpctWitness ? MSG_WITNESS_BLOCK : MSG_BLOCK);
-		WITH_LOCK(cs_main, inv.type = State(pfrom.GetId())->fWantsCmpctMWEB ? MSG_MWEB_BLOCK : inv.type);
         inv.hash = req.blockhash;
         WITH_LOCK(peer->m_getdata_requests_mutex, peer->m_getdata_requests.push_back(inv));
         // The message processing loop will go around again (without pausing) and we'll respond then
@@ -3538,14 +3168,8 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
                 // for concerns around weakening security of unupgraded nodes
                 // if we start doing this too early.
                 assert(recentRejects);
-                // MWEB transaction identifiers do not commit to the MWEB
-                // payload. Caching a rejection would allow an invalid relay
-                // variant to suppress a valid transaction with the same
-                // identifiers.
-                if (!HasUncommittedMWEBPayload(tx)) {
-                    recentRejects->insert(tx.GetWitnessHash());
-                    m_txrequest.ForgetTxHash(tx.GetWitnessHash());
-                }
+                recentRejects->insert(tx.GetWitnessHash());
+                m_txrequest.ForgetTxHash(tx.GetWitnessHash());
                 // If the transaction failed for TX_INPUTS_NOT_STANDARD,
                 // then we know that the witness was irrelevant to the policy
                 // failure, since this check depends only on the txid
@@ -3554,9 +3178,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
                 // processing of this transaction in the event that child
                 // transactions are later received (resulting in
                 // parent-fetching by txid via the orphan-handling logic).
-                if (!HasUncommittedMWEBPayload(tx) &&
-                    state.GetResult() == TxValidationResult::TX_INPUTS_NOT_STANDARD &&
-                    tx.GetWitnessHash() != tx.GetHash()) {
+                if (state.GetResult() == TxValidationResult::TX_INPUTS_NOT_STANDARD && tx.GetWitnessHash() != tx.GetHash()) {
                     recentRejects->insert(tx.GetHash());
                     m_txrequest.ForgetTxHash(tx.GetHash());
                 }
@@ -3598,15 +3220,6 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         if (fImporting || fReindex) {
             LogPrint(BCLog::NET, "Unexpected cmpctblock message received from peer %d\n", pfrom.GetId());
             return;
-        }
-		
-        {
-            LOCK(cs_main);
-            CBlockIndex* pTip = ::ChainActive().Tip();
-            assert(pTip);
-            if (!State(pfrom.GetId())->fWantsCmpctMWEB) {
-                vRecv.SetVersion(vRecv.GetVersion() | SERIALIZE_NO_MWEB);
-            }
         }
 
         CBlockHeaderAndShortTxIDs cmpctblock;
@@ -3690,15 +3303,9 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         if (!fAlreadyInFlight && !CanDirectFetch(m_chainparams.GetConsensus()))
             return;
 
-        if (IsWitnessEnabled(pindex->pprev, m_chainparams.GetConsensus()) && !nodestate->fWantsCmpctWitness) {
+        if (IsWitnessEnabled(pindex->pprev, m_chainparams.GetConsensus()) && !nodestate->fSupportsDesiredCmpctVersion) {
             // Don't bother trying to process compact blocks from v1 peers
             // after segwit activates.
-            return;
-        }
-
-        if (IsMWEBEnabled(pindex->pprev, m_chainparams.GetConsensus()) && !nodestate->fWantsCmpctMWEB) {
-            // Don't bother trying to process compact blocks from v1/v2 peers
-            // after MWEB activates.
             return;
         }
 
@@ -3710,7 +3317,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
                 std::list<QueuedBlock>::iterator* queuedBlockIt = nullptr;
                 if (!MarkBlockAsInFlight(m_mempool, pfrom.GetId(), pindex->GetBlockHash(), pindex, &queuedBlockIt)) {
                     if (!(*queuedBlockIt)->partialBlock)
-                        (*queuedBlockIt)->partialBlock.reset(new PartiallyDownloadedBlock(&m_mempool, cmpctblock.mweb_block));
+                        (*queuedBlockIt)->partialBlock.reset(new PartiallyDownloadedBlock(&m_mempool));
                     else {
                         // The block was already in flight using compact blocks from the same peer
                         LogPrint(BCLog::NET, "Peer sent us compact block we were already syncing!\n");
@@ -3753,7 +3360,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
                 // download from.
                 // Optimistically try to reconstruct anyway since we might be
                 // able to without any round trips.
-                PartiallyDownloadedBlock tempBlock(&m_mempool, cmpctblock.mweb_block);
+                PartiallyDownloadedBlock tempBlock(&m_mempool);
                 ReadStatus status = tempBlock.InitData(cmpctblock, vExtraTxnForCompact);
                 if (status != READ_STATUS_OK) {
                     // TODO: don't ignore failures
@@ -4216,13 +3823,6 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         return;
     }
 
-    if (msg_type == NetMsgType::GETMWEBUTXOS) {
-        GetMWEBUTXOsMsg get_utxos;
-        vRecv >> get_utxos;
-        ProcessGetMWEBUTXOs(pfrom, m_chainman, m_chainparams, m_connman, get_utxos);
-        return;
-    }
-
     // Ignore unknown commands for extensibility
     LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
     return;
@@ -4280,7 +3880,7 @@ bool PeerManager::ProcessMessages(CNode* pfrom, std::atomic<bool>& interruptMsgP
     {
         LOCK(peer->m_getdata_requests_mutex);
         if (!peer->m_getdata_requests.empty()) {
-            ProcessGetData(*pfrom, *peer, m_chainman, m_chainparams, m_connman, m_mempool, interruptMsgProc);
+            ProcessGetData(*pfrom, *peer, m_chainparams, m_connman, m_mempool, interruptMsgProc);
         }
     }
 
@@ -4696,7 +4296,6 @@ bool PeerManager::SendMessages(CNode* pto)
                             vHeaders.front().GetHash().ToString(), pto->GetId());
 
                     int nSendFlags = state.fWantsCmpctWitness ? 0 : SERIALIZE_TRANSACTION_NO_WITNESS;
-                    nSendFlags |= state.fWantsCmpctMWEB ? 0 : SERIALIZE_NO_MWEB;
 
                     bool fGotBlockFromCache = false;
                     {
@@ -4817,7 +4416,7 @@ bool PeerManager::SendMessages(CNode* pto)
                         CInv inv(state.m_wtxid_relay ? MSG_WTX : MSG_TX, hash);
                         pto->m_tx_relay->setInventoryTxToSend.erase(hash);
                         // Don't send transactions that peers will not put into their mempool
-                        if (txinfo.fee < filterrate.GetTotalFee(txinfo.vsize, txinfo.mweb_weight)) {
+                        if (txinfo.fee < filterrate.GetFee(txinfo.vsize)) {
                             continue;
                         }
                         if (pto->m_tx_relay->pfilter) {
@@ -4878,7 +4477,7 @@ bool PeerManager::SendMessages(CNode* pto)
                         auto txid = txinfo.tx->GetHash();
                         auto wtxid = txinfo.tx->GetWitnessHash();
                         // Peer told you to not send transactions at that feerate? Don't bother sending it.
-                        if (txinfo.fee < filterrate.GetTotalFee(txinfo.vsize, txinfo.mweb_weight)) {
+                        if (txinfo.fee < filterrate.GetFee(txinfo.vsize)) {
                             continue;
                         }
                         if (pto->m_tx_relay->pfilter && !pto->m_tx_relay->pfilter->IsRelevantAndUpdate(*txinfo.tx)) continue;

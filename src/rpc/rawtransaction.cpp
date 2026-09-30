@@ -312,7 +312,7 @@ static RPCHelpMan gettxoutproof()
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Not all transactions found in specified or retrieved block");
     }
 
-    CDataStream ssMB(SER_NETWORK, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_NO_WITNESS | SERIALIZE_NO_MWEB);
+    CDataStream ssMB(SER_NETWORK, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_NO_WITNESS);
     CMerkleBlock mb(block, setTxids);
     ssMB << mb;
     std::string strHex = HexStr(ssMB);
@@ -338,7 +338,7 @@ static RPCHelpMan verifytxoutproof()
                 RPCExamples{""},
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
-    CDataStream ssMB(ParseHexV(request.params[0], "proof"), SER_NETWORK, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_NO_WITNESS | SERIALIZE_NO_MWEB);
+    CDataStream ssMB(ParseHexV(request.params[0], "proof"), SER_NETWORK, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_NO_WITNESS);
     CMerkleBlock merkleBlock;
     ssMB >> merkleBlock;
 
@@ -860,9 +860,7 @@ static RPCHelpMan sendrawtransaction()
                                              CFeeRate(AmountFromValue(request.params[1]));
 
     int64_t virtual_size = GetVirtualTransactionSize(*tx);
-    CAmount max_raw_tx_fee = max_raw_tx_fee_rate.GetFeePerK() == 0
-        ? 0
-        : max_raw_tx_fee_rate.GetTotalFee(virtual_size, tx->mweb_tx.GetMWEBWeight());
+    CAmount max_raw_tx_fee = max_raw_tx_fee_rate.GetFee(virtual_size);
 
     std::string err_string;
     AssertLockNotHeld(cs_main);
@@ -943,9 +941,7 @@ static RPCHelpMan testmempoolaccept()
 
     CTxMemPool& mempool = EnsureMemPool(request.context);
     int64_t virtual_size = GetVirtualTransactionSize(*tx);
-    CAmount max_raw_tx_fee = max_raw_tx_fee_rate.GetFeePerK() == 0
-        ? 0
-        : max_raw_tx_fee_rate.GetTotalFee(virtual_size, tx->mweb_tx.GetMWEBWeight());
+    CAmount max_raw_tx_fee = max_raw_tx_fee_rate.GetFee(virtual_size);
 
     UniValue result(UniValue::VARR);
     UniValue result_0(UniValue::VOBJ);

@@ -46,7 +46,6 @@ class NULLDUMMYTest(BitcoinTestFramework):
         self.extra_args = [[
             '-segwitheight=432',
             '-addresstype=legacy',
-            '-vbparams=mweb:-2:0',
         ]] * 2
 
     def skip_test_if_missing_module(self):

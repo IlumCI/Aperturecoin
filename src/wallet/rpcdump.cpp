@@ -61,7 +61,7 @@ static bool GetWalletAddressesForKey(LegacyScriptPubKeyMan* spk_man, const CWall
     bool fLabelFound = false;
     CKey key;
     spk_man->GetKey(keyid, key);
-    for (const auto& dest : GetAllDestinationsForKey(key.GetPubKey(), spk_man->GetScanSecret())) {
+    for (const auto& dest : GetAllDestinationsForKey(key.GetPubKey())) {
         const auto* address_book_entry = pwallet->FindAddressBookEntry(dest);
         if (address_book_entry) {
             if (!strAddr.empty()) {
@@ -73,11 +73,7 @@ static bool GetWalletAddressesForKey(LegacyScriptPubKeyMan* spk_man, const CWall
         }
     }
     if (!fLabelFound) {
-        if (spk_man->mapKeyMetadata[keyid].hdKeypath.find('x') == 0) {
-            strAddr = EncodeDestination(GetDestinationForKey(key.GetPubKey(), OutputType::MWEB, spk_man->GetScanSecret()));
-        } else {
-            strAddr = EncodeDestination(GetDestinationForKey(key.GetPubKey(), pwallet->m_default_address_type, spk_man->GetScanSecret()));
-        }
+        strAddr = EncodeDestination(GetDestinationForKey(key.GetPubKey(), pwallet->m_default_address_type));
     }
     return fLabelFound;
 }
@@ -130,7 +126,7 @@ RPCHelpMan importprivkey()
         throw JSONRPCError(RPC_WALLET_ERROR, "Cannot import private keys to a wallet with private keys disabled");
     }
 
-    LegacyScriptPubKeyMan& spk_man = EnsureLegacyScriptPubKeyMan(*wallet, true);
+    EnsureLegacyScriptPubKeyMan(*wallet, true);
 
     WalletRescanReserver reserver(*pwallet);
     bool fRescan = true;
@@ -171,7 +167,7 @@ RPCHelpMan importprivkey()
             // We don't know which corresponding address will be used;
             // label all new addresses, and label existing addresses if a
             // label was passed.
-            for (const auto& dest : GetAllDestinationsForKey(pubkey, spk_man.GetScanSecret())) {
+            for (const auto& dest : GetAllDestinationsForKey(pubkey)) {
                 if (!request.params[1].isNull() || !pwallet->FindAddressBookEntry(dest)) {
                     pwallet->SetAddressBook(dest, strLabel, "receive");
                 }
@@ -296,16 +292,16 @@ RPCHelpMan importaddress()
 
             pwallet->MarkDirty();
 
-            pwallet->ImportScriptPubKeys(strLabel, {DestinationAddr(dest)}, false /* have_solving_data */, true /* apply_label */, 1 /* timestamp */);
+            pwallet->ImportScriptPubKeys(strLabel, {GetScriptForDestination(dest)}, false /* have_solving_data */, true /* apply_label */, 1 /* timestamp */);
         } else if (IsHex(request.params[0].get_str())) {
             std::vector<unsigned char> data(ParseHex(request.params[0].get_str()));
             CScript redeem_script(data.begin(), data.end());
 
-            pwallet->ImportScripts({redeem_script}, 0 /* timestamp */);
+            std::set<CScript> scripts = {redeem_script};
+            pwallet->ImportScripts(scripts, 0 /* timestamp */);
 
-            std::set<DestinationAddr> scripts = {redeem_script};
             if (fP2SH) {
-                scripts.insert(DestinationAddr(ScriptHash(redeem_script)));
+                scripts.insert(GetScriptForDestination(ScriptHash(redeem_script)));
             }
 
             pwallet->ImportScriptPubKeys(strLabel, scripts, false /* have_solving_data */, true /* apply_label */, 1 /* timestamp */);
@@ -376,8 +372,8 @@ RPCHelpMan importprunedfunds()
     CWalletTx::Confirmation confirm(CWalletTx::Status::CONFIRMED, height, merkleBlock.header.GetHash(), txnIndex);
 
     CTransactionRef tx_ref = MakeTransactionRef(tx);
-    if (pwallet->IsMine(*tx_ref, boost::none)) {
-        pwallet->AddToWallet(std::move(tx_ref), boost::none, confirm);
+    if (pwallet->IsMine(*tx_ref)) {
+        pwallet->AddToWallet(std::move(tx_ref), confirm);
         return NullUniValue;
     }
 
@@ -453,7 +449,7 @@ RPCHelpMan importpubkey()
     if (!wallet) return NullUniValue;
     CWallet* const pwallet = wallet.get();
 
-    LegacyScriptPubKeyMan& spk_man = EnsureLegacyScriptPubKeyMan(*wallet, true);
+    EnsureLegacyScriptPubKeyMan(*wallet, true);
 
     std::string strLabel;
     if (!request.params[1].isNull())
@@ -486,9 +482,9 @@ RPCHelpMan importpubkey()
     {
         LOCK(pwallet->cs_wallet);
 
-        std::set<DestinationAddr> script_pub_keys;
-        for (const auto& dest : GetAllDestinationsForKey(pubKey, spk_man.GetScanSecret())) {
-            script_pub_keys.insert(DestinationAddr(dest));
+        std::set<CScript> script_pub_keys;
+        for (const auto& dest : GetAllDestinationsForKey(pubKey)) {
+            script_pub_keys.insert(GetScriptForDestination(dest));
         }
 
         pwallet->MarkDirty();
@@ -805,14 +801,6 @@ RPCHelpMan dumpwallet()
             file << "# extended private masterkey: " << EncodeExtKey(masterKey) << "\n\n";
         }
     }
-
-    SecretKey scan_secret = spk_man.GetScanSecret();
-    SecretKey spend_secret = spk_man.GetSpendSecret();
-    if (!scan_secret.IsNull() && !spend_secret.IsNull())
-    {
-        file << "# mweb view keys: " << scan_secret.ToHex() << " " << PublicKey::From(spend_secret).ToHex() << "\n\n";
-    }
-
     for (std::vector<std::pair<int64_t, CKeyID> >::const_iterator it = vKeyBirth.begin(); it != vKeyBirth.end(); it++) {
         const CKeyID &keyid = it->second;
         std::string strTime = FormatISO8601DateTime(it->first);
@@ -832,16 +820,7 @@ RPCHelpMan dumpwallet()
             } else {
                 file << "change=1";
             }
-
-            file << strprintf(" # addr=%s", strAddr);
-
-            if (spk_man.mapKeyMetadata[keyid].hdKeypath.find('x') == 0) {
-                file << " hdkeypath=" << spk_man.mapKeyMetadata[keyid].hdKeypath;
-            } else if (spk_man.mapKeyMetadata[keyid].has_key_origin) {
-                file << " hdkeypath=" << WriteHDKeypath(spk_man.mapKeyMetadata[keyid].key_origin.path);
-            }
-
-            file << "\n";
+            file << strprintf(" # addr=%s%s\n", strAddr, (spk_man.mapKeyMetadata[keyid].has_key_origin ? " hdkeypath="+WriteHDKeypath(spk_man.mapKeyMetadata[keyid].key_origin.path) : ""));
         }
     }
     file << "\n";
@@ -960,7 +939,7 @@ static std::string RecurseImportData(const CScript& script, ImportData& import_d
     }
 }
 
-static UniValue ProcessImportLegacy(ImportData& import_data, std::map<CKeyID, CPubKey>& pubkey_map, std::map<CKeyID, CKey>& privkey_map, std::set<DestinationAddr>& script_pub_keys, bool& have_solving_data, const UniValue& data, std::vector<CKeyID>& ordered_pubkeys)
+static UniValue ProcessImportLegacy(ImportData& import_data, std::map<CKeyID, CPubKey>& pubkey_map, std::map<CKeyID, CKey>& privkey_map, std::set<CScript>& script_pub_keys, bool& have_solving_data, const UniValue& data, std::vector<CKeyID>& ordered_pubkeys)
 {
     UniValue warnings(UniValue::VARR);
 
@@ -1104,7 +1083,7 @@ static UniValue ProcessImportLegacy(ImportData& import_data, std::map<CKeyID, CP
     return warnings;
 }
 
-static UniValue ProcessImportDescriptor(ImportData& import_data, std::map<CKeyID, CPubKey>& pubkey_map, std::map<CKeyID, CKey>& privkey_map, std::set<DestinationAddr>& script_pub_keys, bool& have_solving_data, const UniValue& data, std::vector<CKeyID>& ordered_pubkeys)
+static UniValue ProcessImportDescriptor(ImportData& import_data, std::map<CKeyID, CPubKey>& pubkey_map, std::map<CKeyID, CKey>& privkey_map, std::set<CScript>& script_pub_keys, bool& have_solving_data, const UniValue& data, std::vector<CKeyID>& ordered_pubkeys)
 {
     UniValue warnings(UniValue::VARR);
 
@@ -1134,7 +1113,7 @@ static UniValue ProcessImportDescriptor(ImportData& import_data, std::map<CKeyID
     // Expand all descriptors to get public keys and scripts, and private keys if available.
     for (int i = range_start; i <= range_end; ++i) {
         FlatSigningProvider out_keys;
-        std::vector<DestinationAddr> scripts_temp;
+        std::vector<CScript> scripts_temp;
         parsed_desc->Expand(i, keys, scripts_temp, out_keys);
         std::copy(scripts_temp.begin(), scripts_temp.end(), std::inserter(script_pub_keys, script_pub_keys.end()));
         for (const auto& key_pair : out_keys.pubkeys) {
@@ -1212,7 +1191,7 @@ static UniValue ProcessImport(CWallet * const pwallet, const UniValue& data, con
         ImportData import_data;
         std::map<CKeyID, CPubKey> pubkey_map;
         std::map<CKeyID, CKey> privkey_map;
-        std::set<DestinationAddr> script_pub_keys;
+        std::set<CScript> script_pub_keys;
         std::vector<CKeyID> ordered_pubkeys;
         bool have_solving_data;
 
@@ -1232,9 +1211,9 @@ static UniValue ProcessImport(CWallet * const pwallet, const UniValue& data, con
         }
 
         // Check whether we have any work to do
-        for (const DestinationAddr& script : script_pub_keys) {
+        for (const CScript& script : script_pub_keys) {
             if (pwallet->IsMine(script) & ISMINE_SPENDABLE) {
-                throw JSONRPCError(RPC_WALLET_ERROR, "The wallet already contains the private key for this address or script (\"" + (script.IsMWEB() ? script.Encode() : HexStr(script.GetScript())) + "\")");
+                throw JSONRPCError(RPC_WALLET_ERROR, "The wallet already contains the private key for this address or script (\"" + HexStr(script) + "\")");
             }
         }
 
@@ -1543,7 +1522,7 @@ static UniValue ProcessDescriptorImport(CWallet * const pwallet, const UniValue&
 
         // Need to ExpandPrivate to check if private keys are available for all pubkeys
         FlatSigningProvider expand_keys;
-        std::vector<DestinationAddr> scripts;
+        std::vector<CScript> scripts;
         if (!parsed_desc->Expand(0, keys, scripts, expand_keys)) {
             throw JSONRPCError(RPC_WALLET_ERROR, "Cannot expand descriptor. Probably because of hardened derivations without private keys provided");
         }

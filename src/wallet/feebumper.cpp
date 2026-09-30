@@ -66,7 +66,6 @@ static feebumper::Result CheckFeeRate(const CWallet& wallet, const CWalletTx& wt
     // in a rare situation where the mempool minimum fee increased significantly since the fee estimation just a
     // moment earlier. In this case, we report an error to the user, who may adjust the fee.
     CFeeRate minMempoolFeeRate = wallet.chain().mempoolMinFee();
-    const uint64_t mweb_weight = wtx.tx->mweb_tx.GetMWEBWeight();
 
     if (newFeerate.GetFeePerK() < minMempoolFeeRate.GetFeePerK()) {
         errors.push_back(strprintf(
@@ -76,7 +75,7 @@ static feebumper::Result CheckFeeRate(const CWallet& wallet, const CWalletTx& wt
         return feebumper::Result::WALLET_ERROR;
     }
 
-    CAmount new_total_fee = newFeerate.GetTotalFee(maxTxSize, mweb_weight);
+    CAmount new_total_fee = newFeerate.GetFee(maxTxSize);
 
     CFeeRate incrementalRelayFee = std::max(wallet.chain().relayIncrementalFee(), CFeeRate(WALLET_INCREMENTAL_RELAY_FEE));
 
@@ -84,17 +83,17 @@ static feebumper::Result CheckFeeRate(const CWallet& wallet, const CWalletTx& wt
     isminefilter filter = wallet.GetLegacyScriptPubKeyMan() && wallet.IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS) ? ISMINE_WATCH_ONLY : ISMINE_SPENDABLE;
     CAmount old_fee = wtx.GetDebit(filter) - wtx.tx->GetValueOut();
     const int64_t txSize = GetVirtualTransactionSize(*(wtx.tx));
-    CFeeRate nOldFeeRate(old_fee, txSize, mweb_weight);
+    CFeeRate nOldFeeRate(old_fee, txSize);
     // Min total fee is old fee + relay fee
-    CAmount minTotalFee = nOldFeeRate.GetTotalFee(maxTxSize, mweb_weight) + incrementalRelayFee.GetFee(maxTxSize);
+    CAmount minTotalFee = nOldFeeRate.GetFee(maxTxSize) + incrementalRelayFee.GetFee(maxTxSize);
 
     if (new_total_fee < minTotalFee) {
         errors.push_back(strprintf(Untranslated("Insufficient total fee %s, must be at least %s (oldFee %s + incrementalFee %s)"),
-            FormatMoney(new_total_fee), FormatMoney(minTotalFee), FormatMoney(nOldFeeRate.GetTotalFee(maxTxSize, mweb_weight)), FormatMoney(incrementalRelayFee.GetFee(maxTxSize))));
+            FormatMoney(new_total_fee), FormatMoney(minTotalFee), FormatMoney(nOldFeeRate.GetFee(maxTxSize)), FormatMoney(incrementalRelayFee.GetFee(maxTxSize))));
         return feebumper::Result::INVALID_PARAMETER;
     }
 
-    CAmount requiredFee = GetRequiredFee(wallet, maxTxSize, mweb_weight);
+    CAmount requiredFee = GetRequiredFee(wallet, maxTxSize);
     if (new_total_fee < requiredFee) {
         errors.push_back(strprintf(Untranslated("Insufficient total fee (cannot be less than required fee %s)"),
             FormatMoney(requiredFee)));
@@ -118,7 +117,7 @@ static CFeeRate EstimateFeeRate(const CWallet& wallet, const CWalletTx& wtx, con
     // the tx fee/vsize, so it may have been rounded down. Add 1 satoshi to the
     // result.
     int64_t txSize = GetVirtualTransactionSize(*(wtx.tx));
-    CFeeRate feerate(old_fee, txSize, wtx.tx->mweb_tx.GetMWEBWeight());
+    CFeeRate feerate(old_fee, txSize);
     feerate += CFeeRate(1);
 
     // The node has a configurable incremental relay fee. Increment the fee by
@@ -174,17 +173,14 @@ Result CreateRateBumpTransaction(CWallet& wallet, const uint256& txid, const CCo
 
     // Fill in recipients(and preserve a single change key if there is one)
     std::vector<CRecipient> recipients;
-    for (const auto& output : wtx.GetOutputs()) {
-        CTxDestination dest;
-        if (!wallet.ExtractOutputDestination(output, dest)) {
-            return Result::INVALID_ADDRESS_OR_KEY;
-        }
-
+    for (const auto& output : wtx.tx->vout) {
         if (!wallet.IsChange(output)) {
-            CRecipient recipient = {dest, wallet.GetValue(output), false};
+            CRecipient recipient = {output.scriptPubKey, output.nValue, false};
             recipients.push_back(recipient);
         } else {
-            new_coin_control.destChange = dest;
+            CTxDestination change_dest;
+            ExtractDestination(output.scriptPubKey, change_dest);
+            new_coin_control.destChange = change_dest;
         }
     }
 
@@ -211,8 +207,8 @@ Result CreateRateBumpTransaction(CWallet& wallet, const uint256& txid, const CCo
     // A2 and A3 where A2 and A3 don't conflict (or alternatively bump A to A2 and A2
     // to A3 where A and A3 don't conflict). If both later get confirmed then the sender
     // has accidentally double paid.
-    for (const auto& input : wtx.tx->GetInputs()) {
-        new_coin_control.Select(input.GetIndex());
+    for (const auto& inputs : wtx.tx->vin) {
+        new_coin_control.Select(COutPoint(inputs.prevout));
     }
     new_coin_control.fAllowOtherInputs = true;
 

@@ -27,7 +27,7 @@ Chain parameters
 | Agent layer        | covenants, mandates, atomic payments, batch auctions: [covenants](doc/covenants.md), [mandates](doc/agent-mandates.md), [payments](doc/agent-payments.md), [auctions](doc/batch-auctions.md) |
 | Roadmap (drafts)   | useful-work PoW v2 (mining runs the protocol embedding model) [doc/pouw-v2.md](doc/pouw-v2.md), [doc/protocol-model.md](doc/protocol-model.md); agent research market [doc/research-market.md](doc/research-market.md) |
 | Mining protocol    | Stratum V2 Template Provider + reference miner, see [doc/stratum-v2.md](doc/stratum-v2.md) |
-| MWEB               | disabled (the code is dormant; it stays active on regtest for coverage)  |
+| MWEB               | removed (Bitcoin transaction, block and undo serialization)              |
 | Addresses          | `sci1...` (bech32/bech32m), `A...` (P2PKH), `a...` (P2SH)                |
 | Default ports      | P2P 9433, RPC 9432; testnet 19435 / 19432; regtest 19544 / 19543         |
 | Binaries           | `apertured`, `aperture-cli`, `aperture-tx`, `aperture-wallet`, `aperture-qt` |

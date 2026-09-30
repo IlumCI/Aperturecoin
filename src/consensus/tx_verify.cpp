@@ -23,10 +23,6 @@
 
 bool IsFinalTx(const CTransaction &tx, int nBlockHeight, int64_t nBlockTime)
 {
-    // MWEB: Check kernel lock heights
-    if (tx.mweb_tx.GetLockHeight() > nBlockHeight)
-        return false;
-
     if (tx.nLockTime == 0)
         return true;
     if ((int64_t)tx.nLockTime < ((int64_t)tx.nLockTime < LOCKTIME_THRESHOLD ? (int64_t)nBlockHeight : nBlockTime))
@@ -125,11 +121,6 @@ unsigned int GetLegacySigOpCount(const CTransaction& tx)
     for (const auto& txout : tx.vout)
     {
         nSigOps += txout.scriptPubKey.GetSigOpCount(false);
-    }
-
-    // MWEB: Include pegout scripts
-    for (const PegOutCoin& pegout : tx.mweb_tx.GetPegOuts()) {
-        nSigOps += pegout.GetScriptPubKey().GetSigOpCount(false);
     }
 
     return nSigOps;
@@ -289,8 +280,6 @@ bool CheckTokenConservation(const CTransaction& tx, TxValidationState& state, co
 
 bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee)
 {
-    const auto& consensus_params = ::Params().GetConsensus();
-
     // are the actual inputs available?
     if (!inputs.HaveInputs(tx)) {
         return state.Invalid(TxValidationResult::TX_MISSING_INPUTS, "bad-txns-inputs-missingorspent",
@@ -309,12 +298,6 @@ bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, 
         if (coin.IsCoinBase() && nSpendHeight - coin.nHeight < COINBASE_MATURITY && !IsFraudClaimTx(tx)) {
             return state.Invalid(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-premature-spend-of-coinbase",
                 strprintf("tried to spend coinbase at depth %d", nSpendHeight - coin.nHeight));
-        }
-
-        // If coin is a pegout, check that it's matured
-        if (coin.IsPegout() && nSpendHeight - coin.nHeight < PEGOUT_MATURITY) {
-            return state.Invalid(TxValidationResult::TX_PREMATURE_SPEND, "bad-txns-premature-spend-of-pegout",
-                strprintf("tried to spend pegout output at depth %d", nSpendHeight - coin.nHeight));
         }
 
         // Check for negative or overflow input values
@@ -338,39 +321,6 @@ bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, 
     CAmount txfee_aux = nValueIn - value_out;
     if (!MoneyRange(txfee_aux)) {
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-fee-outofrange");
-    }
-
-    // MWEB
-    if (tx.HasMWEBTx()) {
-        for (const Input& input : tx.mweb_tx.m_transaction->GetInputs()) {
-            Output utxo;
-            if (!inputs.GetMWEBCoin(input.GetOutputID(), utxo)) {
-                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-inputs-missing",
-                    strprintf("%s: MWEB inputs missing", __func__));
-            }
-
-            for (const uint256& frozen_output_id : consensus_params.frozen_mweb_output_ids) {
-                if (uint256(input.GetOutputID().vec()) == frozen_output_id) {
-                    return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-frozen-mweb-output",
-                        strprintf("%s: spends frozen MWEB output %s", __func__, input.GetOutputID().ToHex()));
-                }
-            }
-
-            if (utxo.GetReceiverPubKey() != input.GetOutputPubKey() || utxo.GetCommitment() != input.GetCommitment()) {
-                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-input-mismatch",
-                                     strprintf("%s: MWEB input doesn't match UTXO", __func__));
-            }
-        }
-
-        const auto mweb_fee = tx.mweb_tx.GetFee();
-        if (!mweb_fee) {
-            return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-mwebfee-outofrange");
-        }
-
-        txfee_aux += *mweb_fee;
-        if (!MoneyRange(*mweb_fee) || !MoneyRange(txfee_aux)) {
-            return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-mwebfee-outofrange");
-        }
     }
 
     txfee = txfee_aux;

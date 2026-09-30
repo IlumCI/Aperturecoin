@@ -8,7 +8,6 @@
     "locktime": 0,
     "vin": [
         {
-            "ismweb": false,
             "txid": "69e9c12d30a6cd598a31ddfcaabeb9d9f0baf8938bf0ba6610beb04f589cc5ef",
             "vout": 0,
             "scriptSig": {
@@ -20,7 +19,6 @@
     ],
     "vout": [
         {
-            "ismweb": false,
             "value": 0.00200000,
             "n": 0,
             "scriptPubKey": {
@@ -34,7 +32,6 @@
             }
         },
         {
-            "ismweb": false,
             "value": 0.00000000,
             "n": 1,
             "scriptPubKey": {

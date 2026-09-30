@@ -157,25 +157,6 @@ UniValue blockheaderToJSON(const CBlockIndex* tip, const CBlockIndex* blockindex
     result.pushKV("chainwork", blockindex->nChainWork.GetHex());
     result.pushKV("nTx", (uint64_t)blockindex->nTx);
 
-    if (blockindex->mweb_header != nullptr) {
-        UniValue mweb_header(UniValue::VOBJ);
-        mweb_header.pushKV("hash", blockindex->mweb_header->GetHash().ToHex());
-        mweb_header.pushKV("height", blockindex->mweb_header->GetHeight());
-        mweb_header.pushKV("kernel_offset", blockindex->mweb_header->GetKernelOffset().ToHex());
-        mweb_header.pushKV("stealth_offset", blockindex->mweb_header->GetStealthOffset().ToHex());
-        mweb_header.pushKV("num_kernels", blockindex->mweb_header->GetNumKernels());
-        mweb_header.pushKV("num_txos", blockindex->mweb_header->GetNumTXOs());
-        mweb_header.pushKV("kernel_root", blockindex->mweb_header->GetKernelRoot().ToHex());
-        mweb_header.pushKV("output_root", blockindex->mweb_header->GetOutputRoot().ToHex());
-        mweb_header.pushKV("leaf_root", blockindex->mweb_header->GetLeafsetRoot().ToHex());
-        result.pushKV("mweb_header", mweb_header);
-
-        result.pushKV("mweb_amount", blockindex->mweb_amount);
-        if (blockindex->pprev) {
-            result.pushKV("prev_mweb_amount", blockindex->pprev->mweb_amount);
-        }
-    }
-
     if (blockindex->pprev)
         result.pushKV("previousblockhash", blockindex->pprev->GetBlockHash().GetHex());
     if (pnext)
@@ -193,7 +174,7 @@ UniValue blockToJSON(const CBlock& block, const CBlockIndex* tip, const CBlockIn
     const CBlockIndex* pnext;
     int confirmations = ComputeNextBlockAndDepth(tip, blockindex, pnext);
     result.pushKV("confirmations", confirmations);
-    result.pushKV("strippedsize", (int)::GetSerializeSize(block, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_NO_WITNESS | SERIALIZE_NO_MWEB));
+    result.pushKV("strippedsize", (int)::GetSerializeSize(block, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_NO_WITNESS));
     result.pushKV("size", (int)::GetSerializeSize(block, PROTOCOL_VERSION));
     result.pushKV("weight", (int)::GetBlockWeight(block));
     result.pushKV("height", blockindex->nHeight);
@@ -220,88 +201,6 @@ UniValue blockToJSON(const CBlock& block, const CBlockIndex* tip, const CBlockIn
     result.pushKV("difficulty", GetDifficulty(blockindex));
     result.pushKV("chainwork", blockindex->nChainWork.GetHex());
     result.pushKV("nTx", (uint64_t)blockindex->nTx);
-
-    if (!block.mweb_block.IsNull()) {
-        UniValue mweb_block(UniValue::VOBJ);
-
-        // MWEB Header
-        mweb_block.pushKV("hash", block.mweb_block.GetMWEBHeader()->GetHash().ToHex());
-        mweb_block.pushKV("height", block.mweb_block.GetMWEBHeader()->GetHeight());
-        mweb_block.pushKV("kernel_offset", block.mweb_block.GetMWEBHeader()->GetKernelOffset().ToHex());
-        mweb_block.pushKV("stealth_offset", block.mweb_block.GetMWEBHeader()->GetStealthOffset().ToHex());
-        mweb_block.pushKV("num_kernels", block.mweb_block.GetMWEBHeader()->GetNumKernels());
-        mweb_block.pushKV("num_txos", block.mweb_block.GetMWEBHeader()->GetNumTXOs());
-        mweb_block.pushKV("kernel_root", block.mweb_block.GetMWEBHeader()->GetKernelRoot().ToHex());
-        mweb_block.pushKV("output_root", block.mweb_block.GetMWEBHeader()->GetOutputRoot().ToHex());
-        mweb_block.pushKV("leaf_root", block.mweb_block.GetMWEBHeader()->GetLeafsetRoot().ToHex());
-
-        // MWEB Inputs
-        UniValue inputs(UniValue::VARR);
-        for (const auto& input : block.mweb_block.m_block->GetInputs()) {
-            if (txDetails) {
-                UniValue objInput(UniValue::VOBJ);
-                objInput.pushKV("output_id", input.GetOutputID().ToHex());
-                objInput.pushKV("commit", input.GetCommitment().ToHex());
-                objInput.pushKV("output_pubkey", input.GetOutputPubKey().ToHex());
-
-                if (!!input.GetInputPubKey()) {
-                    objInput.pushKV("input_pubkey", input.GetInputPubKey()->ToHex());
-                }
-
-                if (!input.GetExtraData().empty()) {
-                    objInput.pushKV("extra_data", HexStr(input.GetExtraData()));
-                }
-
-                objInput.pushKV("sig", input.GetSignature().ToHex());
-                inputs.push_back(objInput);
-            } else {
-                inputs.push_back(input.GetOutputID().ToHex());
-            }
-        }
-        mweb_block.pushKV("inputs", inputs);
-
-        // MWEB Outputs
-        UniValue outputs(UniValue::VARR);
-        for (const auto& output : block.mweb_block.m_block->GetOutputs()) {
-            if (txDetails) {
-                UniValue objOutput(UniValue::VOBJ);
-                objOutput.pushKV("output_id", output.GetOutputID().ToHex());
-                objOutput.pushKV("commit", output.GetCommitment().ToHex());
-                objOutput.pushKV("sender_pubkey", output.GetSenderPubKey().ToHex());
-                objOutput.pushKV("receiver_pubkey", output.GetReceiverPubKey().ToHex());
-                objOutput.pushKV("range_proof", HexStr(output.GetRangeProof()->Serialized()));
-                objOutput.pushKV("message", HexStr(output.GetOutputMessage().Serialized()));
-                outputs.push_back(objOutput);
-            } else {
-                outputs.push_back(output.GetOutputID().ToHex());
-            }
-        }
-        mweb_block.pushKV("outputs", outputs);
-
-        // MWEB Kernels
-        UniValue kernels(UniValue::VARR);
-        for (const auto& kernel : block.mweb_block.m_block->GetKernels()) {
-            if (txDetails) {
-                UniValue objKernel(UniValue::VOBJ);
-                objKernel.pushKV("kernel_id", kernel.GetKernelID().ToHex());
-                objKernel.pushKV("features", kernel.GetFeatures());
-                objKernel.pushKV("commit", kernel.GetCommitment().ToHex());
-                objKernel.pushKV("fee", kernel.GetFee());
-                objKernel.pushKV("lock_height", kernel.GetLockHeight());
-                objKernel.pushKV("excess", kernel.GetExcess().ToHex());
-                objKernel.pushKV("signature", kernel.GetSignature().ToHex());
-                if (!kernel.GetExtraData().empty()) {
-                    objKernel.pushKV("extra_data", HexStr(kernel.GetExtraData()));
-                }
-                kernels.push_back(objKernel);
-            } else {
-                kernels.push_back(kernel.GetCommitment().ToHex());
-            }
-        }
-        mweb_block.pushKV("kernels", kernels);
-
-        result.pushKV("mweb", mweb_block);
-    }
 
     if (blockindex->pprev)
         result.pushKV("previousblockhash", blockindex->pprev->GetBlockHash().GetHex());
@@ -533,18 +432,15 @@ static RPCHelpMan getdifficulty()
 static std::vector<RPCResult> MempoolEntryDescription() { return {
     RPCResult{RPCResult::Type::NUM, "vsize", "virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted."},
     RPCResult{RPCResult::Type::NUM, "weight", "transaction weight as defined in BIP 141."},
-    RPCResult{RPCResult::Type::NUM, "mwebweight", "transaction MWEB weight"},
     RPCResult{RPCResult::Type::STR_AMOUNT, "fee", "transaction fee in " + CURRENCY_UNIT + " (DEPRECATED)"},
     RPCResult{RPCResult::Type::STR_AMOUNT, "modifiedfee", "transaction fee with fee deltas used for mining priority (DEPRECATED)"},
     RPCResult{RPCResult::Type::NUM_TIME, "time", "local time transaction entered pool in seconds since 1 Jan 1970 GMT"},
     RPCResult{RPCResult::Type::NUM, "height", "block height when transaction entered pool"},
     RPCResult{RPCResult::Type::NUM, "descendantcount", "number of in-mempool descendant transactions (including this one)"},
     RPCResult{RPCResult::Type::NUM, "descendantsize", "virtual transaction size of in-mempool descendants (including this one)"},
-    RPCResult{RPCResult::Type::NUM, "descendantmwebweight", "transaction MWEB weight of in-mempool descendants (including this one)"},
     RPCResult{RPCResult::Type::STR_AMOUNT, "descendantfees", "modified fees (see above) of in-mempool descendants (including this one) (DEPRECATED)"},
     RPCResult{RPCResult::Type::NUM, "ancestorcount", "number of in-mempool ancestor transactions (including this one)"},
     RPCResult{RPCResult::Type::NUM, "ancestorsize", "virtual transaction size of in-mempool ancestors (including this one)"},
-    RPCResult{RPCResult::Type::NUM, "ancestormwebweight", "transaction MWEB weight of in-mempool ancestors (including this one)"},
     RPCResult{RPCResult::Type::STR_AMOUNT, "ancestorfees", "modified fees (see above) of in-mempool ancestors (including this one) (DEPRECATED)"},
     RPCResult{RPCResult::Type::STR_HEX, "wtxid", "hash of serialized transaction, including witness data"},
     RPCResult{RPCResult::Type::OBJ, "fees", "",
@@ -575,18 +471,15 @@ static void entryToJSON(const CTxMemPool& pool, UniValue& info, const CTxMemPool
 
     info.pushKV("vsize", (int)e.GetTxSize());
     info.pushKV("weight", (int)e.GetTxWeight());
-    info.pushKV("mwebweight", (int)e.GetMWEBWeight());
     info.pushKV("fee", ValueFromAmount(e.GetFee()));
     info.pushKV("modifiedfee", ValueFromAmount(e.GetModifiedFee()));
     info.pushKV("time", count_seconds(e.GetTime()));
     info.pushKV("height", (int)e.GetHeight());
     info.pushKV("descendantcount", e.GetCountWithDescendants());
     info.pushKV("descendantsize", e.GetSizeWithDescendants());
-    info.pushKV("descendantmwebweight", e.GetMWEBWeightWithDescendants());
     info.pushKV("descendantfees", e.GetModFeesWithDescendants());
     info.pushKV("ancestorcount", e.GetCountWithAncestors());
     info.pushKV("ancestorsize", e.GetSizeWithAncestors());
-    info.pushKV("ancestormwebweight", e.GetMWEBWeightWithAncestors());
     info.pushKV("ancestorfees", e.GetModFeesWithAncestors());
     info.pushKV("wtxid", pool.vTxHashes[e.vTxHashesIdx].first.ToString());
     const CTransaction& tx = e.GetTx();
@@ -595,67 +488,6 @@ static void entryToJSON(const CTxMemPool& pool, UniValue& info, const CTxMemPool
     {
         if (pool.exists(txin.prevout.hash))
             setDepends.insert(txin.prevout.hash.ToString());
-    }
-
-    uint256 created_tx_hash;
-    for (const mw::Hash& spent_id : tx.mweb_tx.GetSpentIDs()) {
-        if (pool.GetCreatedTx(spent_id, created_tx_hash)) {
-            setDepends.insert(created_tx_hash.ToString());
-        }
-    }
-
-    if (tx.HasMWEBTx()) {
-        UniValue mweb_info(UniValue::VOBJ);
-
-        UniValue mweb_weight(UniValue::VOBJ);
-        mweb_weight.pushKV("base", (int)e.GetMWEBWeight());
-        mweb_weight.pushKV("ancestor", (int)e.GetMWEBWeightWithAncestors());
-        mweb_weight.pushKV("descendant", (int)e.GetMWEBWeightWithDescendants());
-        mweb_info.pushKV("weight", mweb_weight);
-
-        const auto mweb_fee = tx.mweb_tx.GetFee();
-        mweb_info.pushKV("fee", mweb_fee ? ValueFromAmount(*mweb_fee) : UniValue(UniValue::VNULL));
-        mweb_info.pushKV("lock_height", tx.mweb_tx.GetLockHeight());
-
-        // Pegins
-        UniValue pegins(UniValue::VARR);
-        for (const PegInCoin& pegin : tx.mweb_tx.GetPegIns()) {
-            UniValue pegin_uni(UniValue::VOBJ);
-            pegin_uni.pushKV("amount", pegin.GetAmount());
-            pegin_uni.pushKV("kernel_id", pegin.GetKernelID().ToHex());
-            pegins.push_back(pegin_uni);
-        }
-
-        mweb_info.pushKV("pegins", pegins);
-
-        // Pegouts
-        UniValue pegouts(UniValue::VARR);
-        for (const PegOutCoin& pegout : tx.mweb_tx.GetPegOuts()) {
-            UniValue pegout_uni(UniValue::VOBJ);
-            pegout_uni.pushKV("amount", pegout.GetAmount());
-            pegout_uni.pushKV("scriptpubkey", HexStr(pegout.GetScriptPubKey()));
-            pegouts.push_back(pegout_uni);
-        }
-
-        mweb_info.pushKV("pegouts", pegouts);
-
-        // Inputs
-        UniValue spent_ids(UniValue::VARR);
-        for (const mw::Hash& spent_id : tx.mweb_tx.GetSpentIDs()) {
-            spent_ids.push_back(spent_id.ToHex());
-        }
-
-        mweb_info.pushKV("inputs", spent_ids);
-
-        // Outputs
-        UniValue output_ids(UniValue::VARR);
-        for (const mw::Hash& output_id : tx.mweb_tx.GetOutputIDs()) {
-            output_ids.push_back(output_id.ToHex());
-        }
-
-        mweb_info.pushKV("outputs", output_ids);
-
-        info.pushKV("mweb", mweb_info);
     }
 
     UniValue depends(UniValue::VARR);
@@ -931,11 +763,6 @@ static RPCHelpMan getmempoolentry()
     CTxMemPool::txiter it = mempool.mapTx.find(hash);
     if (it == mempool.mapTx.end()) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Transaction not in mempool");
-    }
-
-    if (RPCSerializationFlags() & SERIALIZE_NO_MWEB && it->GetTx().IsMWEBOnly()) {
-        // Don't return MWEB-only transactions to clients that don't support them.
-        throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "MWEB-only transaction not serializable for rpcserialversion<2");
     }
 
     const CTxMemPoolEntry &e = *it;
@@ -1555,7 +1382,6 @@ RPCHelpMan getblockchaininfo()
     BuriedForkDescPushBack(softforks, "segwit", consensusParams.SegwitHeight);
     VBSoftForkDescPushBack(softforks, "testdummy", consensusParams, Consensus::DEPLOYMENT_TESTDUMMY);
     VBSoftForkDescPushBack(softforks, "taproot", consensusParams, Consensus::DEPLOYMENT_TAPROOT);
-    VBSoftForkDescPushBack(softforks, "mweb", consensusParams, Consensus::DEPLOYMENT_MWEB);
     obj.pushKV("softforks",             softforks);
 
     obj.pushKV("warnings", GetWarnings(false).original);
@@ -2264,7 +2090,7 @@ static RPCHelpMan savemempool()
 
 namespace {
 //! Search for a given set of pubkey scripts
-bool FindScriptPubKey(std::atomic<int>& scan_progress, const std::atomic<bool>& should_abort, int64_t& count, CCoinsViewCursor* cursor, const std::set<DestinationAddr>& needles, std::map<COutPoint, Coin>& out_results, std::function<void()>& interruption_point)
+bool FindScriptPubKey(std::atomic<int>& scan_progress, const std::atomic<bool>& should_abort, int64_t& count, CCoinsViewCursor* cursor, const std::set<CScript>& needles, std::map<COutPoint, Coin>& out_results, std::function<void()>& interruption_point)
 {
     scan_progress = 0;
     count = 0;
@@ -2409,8 +2235,8 @@ static RPCHelpMan scantxoutset()
             throw JSONRPCError(RPC_MISC_ERROR, "scanobjects argument is required for the start action");
         }
 
-        std::set<DestinationAddr> needles;
-        std::map<DestinationAddr, std::string> descriptors;
+        std::set<CScript> needles;
+        std::map<CScript, std::string> descriptors;
         CAmount total_in = 0;
 
         // loop through the scan objects

@@ -62,9 +62,6 @@ ReceiveCoinsDialog::ReceiveCoinsDialog(const PlatformStyle *_platformStyle, QWid
     connect(copyAmountAction, &QAction::triggered, this, &ReceiveCoinsDialog::copyAmount);
 
     connect(ui->clearButton, &QPushButton::clicked, this, &ReceiveCoinsDialog::clear);
-
-    connect(ui->useBech32, &QCheckBox::clicked, this, &ReceiveCoinsDialog::useBech32Clicked);
-    connect(ui->useMWEB, &QCheckBox::clicked, this, &ReceiveCoinsDialog::useMWEBClicked);
 }
 
 void ReceiveCoinsDialog::setModel(WalletModel *_model)
@@ -153,8 +150,6 @@ void ReceiveCoinsDialog::on_receiveButton_clicked()
     OutputType address_type;
     if (ui->useBech32->isChecked()) {
         address_type = OutputType::BECH32;
-    } else if (ui->useMWEB->isChecked()) {
-        address_type = OutputType::MWEB;
     } else {
         address_type = model->wallet().getDefaultAddressType();
         if (address_type == OutputType::BECH32) {
@@ -184,15 +179,11 @@ void ReceiveCoinsDialog::on_receiveButton_clicked()
             tr("Could not unlock wallet."),
             QMessageBox::Ok, QMessageBox::Ok);
         break;
-    case AddressTableModel::EditStatus::KEY_GENERATION_FAILURE: {
-        QString message = tr("Could not generate new %1 address.").arg(QString::fromStdString(FormatOutputType(address_type)));
-        if (address_type == OutputType::MWEB) {
-            message += tr("\nTry upgrading your wallet.");
-        }
-
-        QMessageBox::critical(this, windowTitle(), message, QMessageBox::Ok, QMessageBox::Ok);
+    case AddressTableModel::EditStatus::KEY_GENERATION_FAILURE:
+        QMessageBox::critical(this, windowTitle(),
+            tr("Could not generate new %1 address").arg(QString::fromStdString(FormatOutputType(address_type))),
+            QMessageBox::Ok, QMessageBox::Ok);
         break;
-    }
     // These aren't valid return values for our action
     case AddressTableModel::EditStatus::INVALID_ADDRESS:
     case AddressTableModel::EditStatus::DUPLICATE_ADDRESS:
@@ -311,14 +302,4 @@ void ReceiveCoinsDialog::copyMessage()
 void ReceiveCoinsDialog::copyAmount()
 {
     copyColumnToClipboard(RecentRequestsTableModel::Amount);
-}
-
-void ReceiveCoinsDialog::useBech32Clicked()
-{
-    ui->useMWEB->setChecked(false);
-}
-
-void ReceiveCoinsDialog::useMWEBClicked()
-{
-    ui->useBech32->setChecked(false);
 }

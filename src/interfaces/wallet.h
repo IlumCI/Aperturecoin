@@ -7,13 +7,11 @@
 
 #include <amount.h>                    // For CAmount
 #include <interfaces/chain.h>          // For ChainClient
-#include <mw/models/wallet/Coin.h>
 #include <pubkey.h>                    // For CKeyID and CScriptID (definitions needed in CTxDestination instantiation)
 #include <script/standard.h>           // For CTxDestination
 #include <support/allocators/secure.h> // For SecureString
 #include <util/message.h>
 #include <util/ui_change_type.h>
-#include <wallet/txrecord.h>
 
 #include <functional>
 #include <map>
@@ -28,7 +26,6 @@ class CCoinControl;
 class CFeeRate;
 class CKey;
 class CWallet;
-class ReserveDestination;
 enum class FeeReason;
 enum class OutputType;
 enum class TransactionError;
@@ -88,9 +85,6 @@ public:
     // Get a new address.
     virtual bool getNewDestination(const OutputType type, const std::string label, CTxDestination& dest) = 0;
 
-    // Reserves a new key.
-    virtual std::shared_ptr<ReserveDestination> reserveNewDestination(CTxDestination& dest) = 0;
-
     //! Get public key.
     virtual bool getPubKey(const CScript& script, const CKeyID& address, CPubKey& pub_key) = 0;
 
@@ -118,9 +112,6 @@ public:
     //! Get wallet address list.
     virtual std::vector<WalletAddress> getAddresses() = 0;
 
-    //! Look up destination for output, return whether found.
-    virtual bool extractOutputDestination(const CTxOutput& output, CTxDestination& dest) = 0;
-
     //! Add dest data.
     virtual bool addDestData(const CTxDestination& dest, const std::string& key, const std::string& value) = 0;
 
@@ -130,20 +121,17 @@ public:
     //! Get dest values with prefix.
     virtual std::vector<std::string> getDestValues(const std::string& prefix) = 0;
 
-    //! Find MWEB coin with a matching output ID.
-    virtual bool findCoin(const mw::Hash& output_id, mw::Coin& coin) = 0;
-
     //! Lock coin.
-    virtual void lockCoin(const OutputIndex& output) = 0;
+    virtual void lockCoin(const COutPoint& output) = 0;
 
     //! Unlock coin.
-    virtual void unlockCoin(const OutputIndex& output) = 0;
+    virtual void unlockCoin(const COutPoint& output) = 0;
 
     //! Return whether coin is locked.
-    virtual bool isLockedCoin(const OutputIndex& output) = 0;
+    virtual bool isLockedCoin(const COutPoint& output) = 0;
 
     //! List locked coins.
-    virtual void listLockedCoins(std::vector<OutputIndex>& outputs) = 0;
+    virtual void listLockedCoins(std::vector<COutPoint>& outputs) = 0;
 
     //! Create transaction.
     virtual CTransactionRef createTransaction(const std::vector<CRecipient>& recipients,
@@ -156,8 +144,7 @@ public:
     //! Commit transaction.
     virtual void commitTransaction(CTransactionRef tx,
         WalletValueMap value_map,
-        WalletOrderForm order_form,
-        const std::vector<ReserveDestination*>& reserved_keys) = 0;
+        WalletOrderForm order_form) = 0;
 
     //! Return whether transaction can be abandoned.
     virtual bool transactionCanBeAbandoned(const uint256& txid) = 0;
@@ -185,20 +172,20 @@ public:
         std::vector<bilingual_str>& errors,
         uint256& bumped_txid) = 0;
 
-    //! Return whether transaction can be rebroadcast.
-    virtual bool transactionCanBeRebroadcast(const uint256& txid) = 0;
-
-    //! Rebroadcast transaction.
-    virtual bool rebroadcastTransaction(const uint256& txid) = 0;
-
     //! Get a transaction.
     virtual CTransactionRef getTx(const uint256& txid) = 0;
 
     //! Get transaction information.
-    virtual std::vector<WalletTxRecord> getWalletTx(const uint256& txid) = 0;
+    virtual WalletTx getWalletTx(const uint256& txid) = 0;
 
     //! Get list of all wallet transactions.
-    virtual std::vector<WalletTxRecord> getWalletTxs() = 0;
+    virtual std::vector<WalletTx> getWalletTxs() = 0;
+
+    //! Try to get updated status for a particular transaction, if possible without blocking.
+    virtual bool tryGetTxStatus(const uint256& txid,
+        WalletTxStatus& tx_status,
+        int& num_blocks,
+        int64_t& block_time) = 0;
 
     //! Get transaction details.
     virtual WalletTx getWalletTxDetails(const uint256& txid,
@@ -228,37 +215,30 @@ public:
     virtual CAmount getAvailableBalance(const CCoinControl& coin_control) = 0;
 
     //! Return whether transaction input belongs to wallet.
-    virtual isminetype txinIsMine(const CTxInput& txin) = 0;
+    virtual isminetype txinIsMine(const CTxIn& txin) = 0;
 
     //! Return whether transaction output belongs to wallet.
-    virtual isminetype txoutIsMine(const CTxOutput& txout) = 0;
-
-    //! Return the value of the output.
-    virtual CAmount getValue(const CTxOutput& txout) = 0;
+    virtual isminetype txoutIsMine(const CTxOut& txout) = 0;
 
     //! Return debit amount if transaction input belongs to wallet.
-    virtual CAmount getDebit(const CTxInput& txin, isminefilter filter) = 0;
+    virtual CAmount getDebit(const CTxIn& txin, isminefilter filter) = 0;
 
     //! Return credit amount if transaction input belongs to wallet.
-    virtual CAmount getCredit(const CTxOutput& txout, isminefilter filter) = 0;
-
-    //! Return true if the output is a change output.
-    virtual bool isChange(const CTxOutput& txout) = 0;
+    virtual CAmount getCredit(const CTxOut& txout, isminefilter filter) = 0;
 
     //! Return AvailableCoins + LockedCoins grouped by wallet address.
     //! (put change in one group with wallet address)
-    using CoinsList = std::map<CTxDestination, std::vector<std::tuple<OutputIndex, WalletTxOut>>>;
+    using CoinsList = std::map<CTxDestination, std::vector<std::tuple<COutPoint, WalletTxOut>>>;
     virtual CoinsList listCoins() = 0;
 
     //! Return wallet transaction output information.
-    virtual std::vector<WalletTxOut> getCoins(const std::vector<OutputIndex>& outputs) = 0;
+    virtual std::vector<WalletTxOut> getCoins(const std::vector<COutPoint>& outputs) = 0;
 
     //! Get required fee.
-    virtual CAmount getRequiredFee(unsigned int tx_bytes, uint64_t mweb_weight) = 0;
+    virtual CAmount getRequiredFee(unsigned int tx_bytes) = 0;
 
     //! Get minimum fee.
     virtual CAmount getMinimumFee(unsigned int tx_bytes,
-        uint64_t mweb_weight,
         const CCoinControl& coin_control,
         int* returned_target,
         FeeReason* reason) = 0;
@@ -286,9 +266,6 @@ public:
 
     //! Return whether is a legacy wallet
     virtual bool isLegacy() = 0;
-
-    // Get pegin address from MWEB wallet.
-    virtual bool getPeginAddress(StealthAddress& pegin_address) = 0;
 
     //! Register handler for unload message.
     using UnloadFn = std::function<void()>;
@@ -388,38 +365,20 @@ struct WalletBalances
     }
 };
 
-//! Wallet transaction output.
-struct WalletTxOut
-{
-    CTxOutput txout;
-    DestinationAddr address;
-    OutputIndex output_index;
-    CAmount nValue;
-    int64_t time;
-    int depth_in_main_chain = -1;
-    bool is_spent = false;
-};
-
 // Wallet transaction information.
 struct WalletTx
 {
     CTransactionRef tx;
     std::vector<isminetype> txin_is_mine;
     std::vector<isminetype> txout_is_mine;
+    std::vector<CTxDestination> txout_address;
     std::vector<isminetype> txout_address_is_mine;
-    std::vector<isminetype> pegout_is_mine;
     CAmount credit;
     CAmount debit;
     CAmount change;
-    CAmount fee;
     int64_t time;
     std::map<std::string, std::string> value_map;
     bool is_coinbase;
-    bool is_hogex;
-    uint256 wtx_hash;
-    std::vector<CTxInput> inputs;
-    std::vector<WalletTxOut> outputs;
-    std::vector<PegOutCoin> pegouts;
 };
 
 //! Updated transaction status.
@@ -434,8 +393,16 @@ struct WalletTxStatus
     bool is_trusted;
     bool is_abandoned;
     bool is_coinbase;
-    bool is_hogex;
     bool is_in_main_chain;
+};
+
+//! Wallet transaction output.
+struct WalletTxOut
+{
+    CTxOut txout;
+    int64_t time;
+    int depth_in_main_chain = -1;
+    bool is_spent = false;
 };
 
 //! Return implementation of Wallet interface. This function is defined in

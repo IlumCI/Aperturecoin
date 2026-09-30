@@ -9,7 +9,6 @@
 #include <coins.h>
 #include <hash.h>
 #include <pubkey.h>
-#include <script/address.h>
 #include <script/interpreter.h>
 #include <script/keyorigin.h>
 #include <span.h>
@@ -166,7 +165,7 @@ void UpdateInput(CTxIn& input, const SignatureData& data);
  * have all private keys. While this function does not need private keys, the passed
  * provider is used to look up public keys and redeemscripts by hash.
  * Solvability is unrelated to whether we consider this output to be ours. */
-bool IsSolvable(const SigningProvider& provider, const DestinationAddr& dest_addr);
+bool IsSolvable(const SigningProvider& provider, const CScript& script);
 
 /** Check whether a scriptPubKey is known to be segwit. */
 bool IsSegWitOutput(const SigningProvider& provider, const CScript& script);

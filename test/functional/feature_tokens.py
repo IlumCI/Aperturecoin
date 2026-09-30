@@ -32,7 +32,9 @@ class TokenConsensusTest(BitcoinTestFramework):
 
     def fee_utxo(self, exclude=()):
         for u in self.node.listunspent():
-            if (u["txid"], u["vout"]) not in exclude and u["amount"] > 1:
+            # Never take the fee input from a transaction already spent here: an index-0
+            # sibling would otherwise turn a rejected raw genesis into a valid one.
+            if u["txid"] not in {t for t, _ in exclude} and u["amount"] > 1:
                 return u
         raise AssertionError("no fee utxo")
 
@@ -128,6 +130,9 @@ class TokenConsensusTest(BitcoinTestFramework):
         self.assert_accepted(self.build(imm_in, [(token_script(cat_imm, lock, nft="none", commitment=b"\xbb"), TOKEN_VALUE)]))
 
         self.log.info("Raw genesis: only an input spending index 0 creates its txid's category")
+        # Two wallet outputs guarantee at least one spendable output at a non-zero index.
+        self.node.sendmany("", {self.node.getnewaddress(): 5, self.node.getnewaddress(): 5})
+        self.node.generatetoaddress(1, self.miner_addr)
         u1 = next(u for u in self.node.listunspent() if u["vout"] != 0 and u["amount"] > 1)
         self.assert_rejected(self.build([(u1["txid"], u1["vout"])],
                                         [(token_script(u1["txid"], lock, amount=5), TOKEN_VALUE)]),

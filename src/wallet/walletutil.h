@@ -26,9 +26,7 @@ enum WalletFeature
 
     FEATURE_PRE_SPLIT_KEYPOOL = 169900, // Upgraded to HD SPLIT and can have a pre-split keypool
 
-    FEATURE_MWEB = 210000, // Wallet with MWEB keys and coins
-
-    FEATURE_LATEST = FEATURE_MWEB
+    FEATURE_LATEST = FEATURE_PRE_SPLIT_KEYPOOL
 };
 
 bool IsFeatureSupported(int wallet_version, int feature_version);

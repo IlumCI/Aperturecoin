@@ -10,7 +10,6 @@
 #include <core_memusage.h>
 #include <crypto/siphash.h>
 #include <memusage.h>
-#include <mw/node/CoinsView.h>
 #include <primitives/transaction.h>
 #include <serialize.h>
 #include <uint256.h>
@@ -40,35 +39,27 @@ public:
     //! at which height this containing transaction was included in the active block chain
     uint32_t nHeight : 31;
 
-    //! whether output was a pegout from a hogex transaction
-    bool fPegout;
-
     //! construct a Coin from a CTxOut and height/coinbase information.
-    Coin(CTxOut&& outIn, int nHeightIn, bool fCoinBaseIn, bool fPegoutIn) : out(std::move(outIn)), fCoinBase(fCoinBaseIn), nHeight(nHeightIn), fPegout(fPegoutIn) {}
-    Coin(const CTxOut& outIn, int nHeightIn, bool fCoinBaseIn, bool fPegoutIn) : out(outIn), fCoinBase(fCoinBaseIn), nHeight(nHeightIn), fPegout(fPegoutIn) {}
+    Coin(CTxOut&& outIn, int nHeightIn, bool fCoinBaseIn) : out(std::move(outIn)), fCoinBase(fCoinBaseIn), nHeight(nHeightIn) {}
+    Coin(const CTxOut& outIn, int nHeightIn, bool fCoinBaseIn) : out(outIn), fCoinBase(fCoinBaseIn), nHeight(nHeightIn) {}
 
     void Clear() {
         out.SetNull();
         fCoinBase = false;
-        fPegout = false;
         nHeight = 0;
     }
 
     //! empty constructor
-    Coin() : fCoinBase(false), nHeight(0), fPegout(false) {}
+    Coin() : fCoinBase(false), nHeight(0) {}
 
     bool IsCoinBase() const {
         return fCoinBase;
     }
 
-    bool IsPegout() const {
-        return fPegout;
-    }
-
     template<typename Stream>
     void Serialize(Stream &s) const {
         assert(!IsSpent());
-        uint32_t code = nHeight * uint32_t{2} + fCoinBase + (fPegout ? (uint32_t{1} << 31) : uint32_t{0});
+        uint32_t code = nHeight * uint32_t{2} + fCoinBase;
         ::Serialize(s, VARINT(code));
         ::Serialize(s, Using<TxOutCompression>(out));
     }
@@ -77,8 +68,7 @@ public:
     void Unserialize(Stream &s) {
         uint32_t code = 0;
         ::Unserialize(s, VARINT(code));
-        fPegout = code >> 31;
-        nHeight = (code & ~(uint32_t{1} << 31)) >> 1;
+        nHeight = code >> 1;
         fCoinBase = code & 1;
         ::Unserialize(s, Using<TxOutCompression>(out));
     }
@@ -210,7 +200,7 @@ public:
 
     //! Do a bulk modification (multiple Coin changes + BestBlock change).
     //! The passed mapCoins can be modified.
-    virtual bool BatchWrite(CCoinsMap& mapCoins, const uint256& hashBlock, const mw::CoinsViewCache::Ptr& derivedView);
+    virtual bool BatchWrite(CCoinsMap& mapCoins, const uint256& hashBlock);
 
     //! Get a cursor to iterate over the whole state
     virtual CCoinsViewCursor *Cursor() const;
@@ -220,10 +210,6 @@ public:
 
     //! Estimate database size (0 if not implemented)
     virtual size_t EstimateSize() const { return 0; }
-
-    virtual mw::ICoinsView::Ptr GetMWEBView() const { return nullptr; }
-    
-    virtual bool GetMWEBCoin(const mw::Hash& output_id, Output& coin) const { return false; }
 };
 
 
@@ -240,11 +226,9 @@ public:
     uint256 GetBestBlock() const override;
     std::vector<uint256> GetHeadBlocks() const override;
     virtual void SetBackend(CCoinsView &viewIn);
-    bool BatchWrite(CCoinsMap& mapCoins, const uint256& hashBlock, const mw::CoinsViewCache::Ptr& derivedView) override;
+    bool BatchWrite(CCoinsMap& mapCoins, const uint256& hashBlock) override;
     CCoinsViewCursor *Cursor() const override;
     size_t EstimateSize() const override;
-    mw::ICoinsView::Ptr GetMWEBView() const override;
-    bool GetMWEBCoin(const mw::Hash& output_id, Output& coin) const override;
 };
 
 
@@ -262,8 +246,6 @@ protected:
     /* Cached dynamic memory usage for the inner Coin objects. */
     mutable size_t cachedCoinsUsage;
 
-    mw::CoinsViewCache::Ptr mweb_view;
-
 public:
     CCoinsViewCache(CCoinsView *baseIn);
 
@@ -278,15 +260,10 @@ public:
     uint256 GetBestBlock() const override;
     void SetBestBlock(const uint256& hashBlock);
     void SetBackend(CCoinsView& viewIn) override;
-    bool BatchWrite(CCoinsMap& mapCoins, const uint256& hashBlock, const mw::CoinsViewCache::Ptr& derivedView) override;
+    bool BatchWrite(CCoinsMap& mapCoins, const uint256& hashBlock) override;
     CCoinsViewCursor* Cursor() const override {
         throw std::logic_error("CCoinsViewCache cursor iteration not supported.");
     }
-
-    mw::ICoinsView::Ptr GetMWEBView() const final { return mweb_view; }
-    mw::CoinsViewCache::Ptr GetMWEBCacheView() const { return mweb_view; }
-
-    bool GetMWEBCoin(const mw::Hash& output_id, Output& coin) const final;
 
     /**
      * Check if we have the given utxo already loaded in this cache.

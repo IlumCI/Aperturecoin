@@ -189,7 +189,7 @@ static bool getScriptFromDescriptor(const std::string& descriptor, CScript& scri
         }
 
         FlatSigningProvider provider;
-        std::vector<DestinationAddr> scripts;
+        std::vector<CScript> scripts;
         if (!desc->Expand(0, key_provider, scripts, provider)) {
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Cannot derive script without private keys"));
         }
@@ -197,18 +197,14 @@ static bool getScriptFromDescriptor(const std::string& descriptor, CScript& scri
         // Combo descriptors can have 2 or 4 scripts, so we can't just check scripts.size() == 1
         CHECK_NONFATAL(scripts.size() > 0 && scripts.size() <= 4);
 
-        for (const DestinationAddr& script : scripts) {
-            CHECK_NONFATAL(!script.IsMWEB());
-        }
-
         if (scripts.size() == 1) {
-            script = scripts.at(0).GetScript();
+            script = scripts.at(0);
         } else if (scripts.size() == 4) {
             // For uncompressed keys, take the 3rd script, since it is p2wpkh
-            script = scripts.at(2).GetScript();
+            script = scripts.at(2);
         } else {
             // Else take the 2nd script, since it is p2pkh
-            script = scripts.at(1).GetScript();
+            script = scripts.at(1);
         }
 
         return true;
@@ -292,7 +288,7 @@ static RPCHelpMan generatetoaddress()
     const uint64_t max_tries{request.params[2].isNull() ? DEFAULT_MAX_TRIES : request.params[2].get_int()};
 
     CTxDestination destination = DecodeDestination(request.params[1].get_str());
-    if (!IsValidDestination(destination) || destination.type() == typeid(StealthAddress)) {
+    if (!IsValidDestination(destination)) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Error: Invalid address");
     }
 
@@ -449,7 +445,6 @@ static RPCHelpMan getmininginfo()
     UniValue obj(UniValue::VOBJ);
     obj.pushKV("blocks",           (int)::ChainActive().Height());
     if (BlockAssembler::m_last_block_weight) obj.pushKV("currentblockweight", *BlockAssembler::m_last_block_weight);
-    if (BlockAssembler::m_last_block_mweb_weight) obj.pushKV("currentblockmwebweight", *BlockAssembler::m_last_block_mweb_weight);
     if (BlockAssembler::m_last_block_num_txs) obj.pushKV("currentblocktx", *BlockAssembler::m_last_block_num_txs);
     obj.pushKV("difficulty",       (double)GetDifficulty(::ChainActive().Tip()));
     obj.pushKV("networkhashps",    getnetworkhashps().HandleRequest(request));
@@ -550,7 +545,6 @@ static RPCHelpMan getblocktemplate()
                             {"rules", RPCArg::Type::ARR, RPCArg::Optional::NO, "A list of strings",
                                 {
                                     {"segwit", RPCArg::Type::STR, RPCArg::Optional::NO, "(literal) indicates client side segwit support"},
-                                    {"mweb", RPCArg::Type::STR, RPCArg::Optional::NO, "(literal) indicates client side MWEB support"},
                                     {"str", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "other client side supported softfork deployment"},
                                 },
                                 },
@@ -621,12 +615,11 @@ static RPCHelpMan getblocktemplate()
                         {RPCResult::Type::NUM_TIME, "curtime", "current timestamp in " + UNIX_EPOCH_TIME},
                         {RPCResult::Type::STR, "bits", "compressed target of next block"},
                         {RPCResult::Type::NUM, "height", "The height of the next block"},
-                        {RPCResult::Type::STR, "default_witness_commitment", /* optional */ true, "a valid witness commitment for the unmodified block template"},
-                        {RPCResult::Type::STR, "mweb", /* optional */ true, "the MWEB block serialized as hex"}
+                        {RPCResult::Type::STR, "default_witness_commitment", /* optional */ true, "a valid witness commitment for the unmodified block template"}
                     }},
                 RPCExamples{
-                    HelpExampleCli("getblocktemplate", "'{\"rules\": [\"mweb\", \"segwit\"]}'")
-            + HelpExampleRpc("getblocktemplate", "{\"rules\": [\"mweb\", \"segwit\"]}")
+                    HelpExampleCli("getblocktemplate", "'{\"rules\": [\"segwit\"]}'")
+            + HelpExampleRpc("getblocktemplate", "{\"rules\": [\"segwit\"]}")
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -759,9 +752,9 @@ static RPCHelpMan getblocktemplate()
         // TODO: Maybe recheck connections/IBD and (if something wrong) send an expires-immediately template to stop miners?
     }
 
-    // GBT must be called with 'segwit' and 'mweb' sets in the rules
-    if (setClientRules.count("segwit") != 1 || setClientRules.count("mweb") != 1) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "getblocktemplate must be called with the segwit & mweb rule sets (call with {\"rules\": [\"mweb\", \"segwit\"]})");
+    // GBT must be called with 'segwit' set in the rules
+    if (setClientRules.count("segwit") != 1) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "getblocktemplate must be called with the segwit rule set (call with {\"rules\": [\"segwit\"]})");
     }
 
     // Update block
@@ -964,11 +957,6 @@ static RPCHelpMan getblocktemplate()
 
     if (!pblocktemplate->vchCoinbaseCommitment.empty()) {
         result.pushKV("default_witness_commitment", HexStr(pblocktemplate->vchCoinbaseCommitment));
-    }
-
-    const auto& mweb_block = pblocktemplate->block.mweb_block;
-    if (!mweb_block.IsNull()) {
-        result.pushKV("mweb", HexStr(mweb_block.m_block->Serialized()));
     }
 
     return result;

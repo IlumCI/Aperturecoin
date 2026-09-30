@@ -30,7 +30,6 @@ import threading
 
 from test_framework.messages import (
     CBlockHeader,
-    Hash,
     MAX_HEADERS_RESULTS,
     MIN_VERSION_SUPPORTED,
     msg_addr,
@@ -51,14 +50,10 @@ from test_framework.messages import (
     msg_getblocktxn,
     msg_getdata,
     msg_getheaders,
-    msg_getmwebutxos,
     msg_headers,
     msg_inv,
     msg_mempool,
     msg_merkleblock,
-    msg_mwebheader,
-    msg_mwebleafset,
-    msg_mwebutxos,
     msg_notfound,
     msg_ping,
     msg_pong,
@@ -72,7 +67,6 @@ from test_framework.messages import (
     msg_version,
     MSG_WTX,
     msg_wtxidrelay,
-    NODE_MWEB,
     NODE_NETWORK,
     NODE_WITNESS,
     sha256,
@@ -103,14 +97,10 @@ MESSAGEMAP = {
     b"getblocktxn": msg_getblocktxn,
     b"getdata": msg_getdata,
     b"getheaders": msg_getheaders,
-    b"getmwebutxos": msg_getmwebutxos,
     b"headers": msg_headers,
     b"inv": msg_inv,
     b"mempool": msg_mempool,
     b"merkleblock": msg_merkleblock,
-    b"mwebheader": msg_mwebheader,
-    b"mwebleafset": msg_mwebleafset,
-    b"mwebutxos": msg_mwebutxos,
     b"notfound": msg_notfound,
     b"ping": msg_ping,
     b"pong": msg_pong,
@@ -341,7 +331,7 @@ class P2PInterface(P2PConnection):
         vt.addrFrom.port = 0
         self.on_connection_send_msg = vt  # Will be sent in connection_made callback
 
-    def peer_connect(self, *args, services=NODE_NETWORK|NODE_WITNESS|NODE_MWEB, send_version=True, **kwargs):
+    def peer_connect(self, *args, services=NODE_NETWORK|NODE_WITNESS, send_version=True, **kwargs):
         create_conn = super().peer_connect(*args, **kwargs)
 
         if send_version:
@@ -349,7 +339,7 @@ class P2PInterface(P2PConnection):
 
         return create_conn
 
-    def peer_accept_connection(self, *args, services=NODE_NETWORK|NODE_WITNESS|NODE_MWEB, **kwargs):
+    def peer_accept_connection(self, *args, services=NODE_NETWORK|NODE_WITNESS, **kwargs):
         create_conn = super().peer_accept_connection(*args, **kwargs)
         self.peer_connect_send_version(services)
 
@@ -399,7 +389,6 @@ class P2PInterface(P2PConnection):
     def on_getdata(self, message): pass
     def on_getheaders(self, message): pass
     def on_headers(self, message): pass
-    def on_hogexheader(self, message): pass
     def on_mempool(self, message): pass
     def on_merkleblock(self, message): pass
     def on_notfound(self, message): pass
@@ -482,30 +471,6 @@ class P2PInterface(P2PConnection):
             if not last_filtered_block:
                 return False
             return last_filtered_block.merkleblock.header.rehash() == int(blockhash, 16)
-
-        self.wait_until(test_function, timeout=timeout)
-
-    def wait_for_mwebheader(self, blockhash, timeout=60):
-        """Waits for an mwebheader message
-        
-        The hash of the block header must match the provided blockhash"""
-        def test_function():
-            last_mwebheader = self.last_message.get('mwebheader')
-            if not last_mwebheader:
-                return False
-            return last_mwebheader.merkleblockwithmweb.merkle.header.rehash() == int(blockhash, 16)
-
-        self.wait_until(test_function, timeout=timeout)
-
-    def wait_for_mwebleafset(self, blockhash, timeout=60):
-        """Waits for an mwebleafset message
-        
-        The hash of the block header must match the provided blockhash"""
-        def test_function():
-            last_mwebleafset = self.last_message.get('mwebleafset')
-            if not last_mwebleafset:
-                return False
-            return last_mwebleafset.block_hash == Hash(int(blockhash, 16))
 
         self.wait_until(test_function, timeout=timeout)
 

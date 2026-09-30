@@ -74,13 +74,6 @@ static std::vector<uint8_t> DevFundRegTestScript()
     return std::vector<uint8_t>(script.begin(), script.end());
 }
 
-static std::vector<uint256> GetFrozenMWEBOutputIDs()
-{
-    return {
-        uint256(ParseHex("2f3a08d9f5ef5f388386c11efe935394b14b524220cff4ec5c81942b82e694f7")),
-    };
-}
-
 /**
  * Main network
  */
@@ -118,16 +111,8 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nStartTime = Consensus::BIP9Deployment::ALWAYS_ACTIVE;
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
 
-        // MWEB (LIP-0002, LIP-0003, LIP-0004) is disabled; the code is dormant.
-        consensus.vDeployments[Consensus::DEPLOYMENT_MWEB].bit = 4;
-        consensus.vDeployments[Consensus::DEPLOYMENT_MWEB].nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
-        consensus.vDeployments[Consensus::DEPLOYMENT_MWEB].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
-
         consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
-
-        consensus.mweb_pegout_feature_activation_height = 0;
-        consensus.mweb_extradata_feature_activation_height = 0;
 
         // Development fund: 1.5% of the subsidy until the first halving.
         consensus.devFundScript = DevFundPlaceholderScript();
@@ -168,7 +153,6 @@ public:
         base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x88, 0xAD, 0xE4};
 
         bech32_hrp = "sci";
-        mweb_hrp = "scimweb";
 
         fDefaultConsistencyChecks = false;
         fRequireStandard = true;
@@ -224,15 +208,8 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nStartTime = Consensus::BIP9Deployment::ALWAYS_ACTIVE;
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
 
-        consensus.vDeployments[Consensus::DEPLOYMENT_MWEB].bit = 4;
-        consensus.vDeployments[Consensus::DEPLOYMENT_MWEB].nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
-        consensus.vDeployments[Consensus::DEPLOYMENT_MWEB].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
-
         consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
-
-        consensus.mweb_pegout_feature_activation_height = 0;
-        consensus.mweb_extradata_feature_activation_height = 0;
 
         consensus.devFundScript = DevFundPlaceholderScript();
         consensus.nDevFundBasisPoints = 150;
@@ -263,7 +240,6 @@ public:
         base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
 
         bech32_hrp = "tsci";
-        mweb_hrp = "tscimweb";
 
         fDefaultConsistencyChecks = false;
         fRequireStandard = false;
@@ -323,17 +299,8 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nStartTime = Consensus::BIP9Deployment::ALWAYS_ACTIVE;
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
 
-        // MWEB is disabled on main and test networks. Regtest keeps it active so
-        // that the dormant code remains covered by tests.
-        consensus.vDeployments[Consensus::DEPLOYMENT_MWEB].bit = 4;
-        consensus.vDeployments[Consensus::DEPLOYMENT_MWEB].nStartTime = 1601450001; // September 30, 2020
-        consensus.vDeployments[Consensus::DEPLOYMENT_MWEB].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
-
         consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
-        consensus.mweb_pegout_feature_activation_height = 0;
-        consensus.mweb_extradata_feature_activation_height = 0;
-        consensus.frozen_mweb_output_ids = GetFrozenMWEBOutputIDs();
         // Development fund is off by default on regtest; see -devfundendheight.
         consensus.devFundScript = DevFundRegTestScript();
         consensus.nDevFundBasisPoints = 150;
@@ -382,7 +349,6 @@ public:
         base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
 
         bech32_hrp = "rsci";
-        mweb_hrp = "tmweb";
     }
 
     /**

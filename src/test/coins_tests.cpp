@@ -36,18 +36,8 @@ class CCoinsViewTest : public CCoinsView
 {
     uint256 hashBestBlock_;
     std::map<COutPoint, Coin> map_;
-    mw::ICoinsView::Ptr mweb_view_;
 
 public:
-    CCoinsViewTest()
-    {
-        mweb_view_ = mw::CoinsViewDB::Open(
-            FilePath{GetDataDir()},
-            {nullptr},
-            nullptr
-        );
-    }
-
     NODISCARD bool GetCoin(const COutPoint& outpoint, Coin& coin) const override
     {
         std::map<COutPoint, Coin>::const_iterator it = map_.find(outpoint);
@@ -64,7 +54,7 @@ public:
 
     uint256 GetBestBlock() const override { return hashBestBlock_; }
 
-    bool BatchWrite(CCoinsMap& mapCoins, const uint256& hashBlock, const mw::CoinsViewCache::Ptr& mweb_view) override
+    bool BatchWrite(CCoinsMap& mapCoins, const uint256& hashBlock) override
     {
         for (CCoinsMap::iterator it = mapCoins.begin(); it != mapCoins.end(); ) {
             if (it->second.flags & CCoinsCacheEntry::DIRTY) {
@@ -80,11 +70,6 @@ public:
         if (!hashBlock.IsNull())
             hashBestBlock_ = hashBlock;
         return true;
-    }
-    
-    mw::ICoinsView::Ptr GetMWEBView() const override
-    {
-        return mweb_view_;
     }
 };
 
@@ -285,11 +270,6 @@ BOOST_AUTO_TEST_CASE(coins_cache_simulation_test)
     SimulationTest(&base, false);
 
     CCoinsViewDB db_base{"test", /*nCacheSize*/ 1 << 23, /*fMemory*/ true, /*fWipe*/ false};
-    mw::ICoinsView::Ptr mweb_view = mw::CoinsViewDB::Open(
-        FilePath{GetDataDir()},
-        {nullptr},
-        nullptr);
-    db_base.SetMWEBView(mweb_view);
     SimulationTest(&db_base, true);
 }
 
@@ -413,7 +393,7 @@ BOOST_AUTO_TEST_CASE(updatecoins_simulation_test)
             // Update the expected result to know about the new output coins
             assert(tx.vout.size() == 1);
             const COutPoint outpoint(tx.GetHash(), 0);
-            result[outpoint] = Coin(tx.vout[0], height, CTransaction(tx).IsCoinBase(), false);
+            result[outpoint] = Coin(tx.vout[0], height, CTransaction(tx).IsCoinBase());
 
             // Call UpdateCoins on the top cache
             CTxUndo undo;
@@ -568,29 +548,6 @@ BOOST_AUTO_TEST_CASE(ccoins_serialization)
     }
 }
 
-BOOST_AUTO_TEST_CASE(txinundo_serialization)
-{
-    CTxUndo undo;
-    undo.vprevout.emplace_back(CTxOut(1, CScript()), 100, false, true);
-    undo.vprevout.emplace_back(CTxOut(2, CScript()), 101, true, false);
-
-    CDataStream stream(SER_DISK, CLIENT_VERSION);
-    stream << undo;
-
-    CTxUndo deserialized;
-    stream >> deserialized;
-
-    BOOST_REQUIRE_EQUAL(deserialized.vprevout.size(), 2U);
-    BOOST_CHECK_EQUAL(deserialized.vprevout[0].nHeight, 100U);
-    BOOST_CHECK(!deserialized.vprevout[0].fCoinBase);
-    BOOST_CHECK(deserialized.vprevout[0].fPegout);
-    BOOST_CHECK_EQUAL(deserialized.vprevout[0].out.nValue, 1);
-    BOOST_CHECK_EQUAL(deserialized.vprevout[1].nHeight, 101U);
-    BOOST_CHECK(deserialized.vprevout[1].fCoinBase);
-    BOOST_CHECK(!deserialized.vprevout[1].fPegout);
-    BOOST_CHECK_EQUAL(deserialized.vprevout[1].out.nValue, 2);
-}
-
 const static COutPoint OUTPOINT;
 const static CAmount SPENT = -1;
 const static CAmount ABSENT = -2;
@@ -650,39 +607,25 @@ void GetCoinsMapEntry(const CCoinsMap& map, CAmount& value, char& flags)
     }
 }
 
-void WriteCoinsViewEntry(CCoinsView& view, const mw::CoinsViewCache::Ptr& mweb_view, CAmount value, char flags)
+void WriteCoinsViewEntry(CCoinsView& view, CAmount value, char flags)
 {
     CCoinsMap map;
     InsertCoinsMapEntry(map, value, flags);
-    BOOST_CHECK(view.BatchWrite(map, {}, mweb_view));
+    BOOST_CHECK(view.BatchWrite(map, {}));
 }
 
 class SingleEntryCacheTest
 {
 public:
     SingleEntryCacheTest(CAmount base_value, CAmount cache_value, char cache_flags)
-        : root(GetCoinsViewDB()), base(root.get()), cache(&base)
     {
-        WriteCoinsViewEntry(base, cache.GetMWEBCacheView(), base_value, base_value == ABSENT ? NO_ENTRY : DIRTY);
+        WriteCoinsViewEntry(base, base_value, base_value == ABSENT ? NO_ENTRY : DIRTY);
         cache.usage() += InsertCoinsMapEntry(cache.map(), cache_value, cache_flags);
     }
 
-    static std::unique_ptr<CCoinsViewDB> GetCoinsViewDB()
-    {
-        std::unique_ptr<CCoinsViewDB> root(new CCoinsViewDB{GetDataDir(), 1 << 20, false, false});
-        mw::ICoinsView::Ptr mweb_view = mw::CoinsViewDB::Open(
-            FilePath{GetDataDir()},
-            {nullptr},
-            nullptr
-        );
-        root->SetMWEBView(mweb_view);
-        return root;
-    }
-
-    std::unique_ptr<CCoinsViewDB> root;
-
-    CCoinsViewCacheTest base;
-    CCoinsViewCacheTest cache;
+    CCoinsView root;
+    CCoinsViewCacheTest base{&root};
+    CCoinsViewCacheTest cache{&base};
 };
 
 static void CheckAccessCoin(CAmount base_value, CAmount cache_value, CAmount expected_value, char cache_flags, char expected_flags)
@@ -791,13 +734,12 @@ static void CheckAddCoinBase(CAmount base_value, CAmount cache_value, CAmount mo
 {
     SingleEntryCacheTest test(base_value, cache_value, cache_flags);
 
-    bool fPegout = false;
     CAmount result_value;
     char result_flags;
     try {
         CTxOut output;
         output.nValue = modify_value;
-        test.cache.AddCoin(OUTPOINT, Coin(std::move(output), 1, coinbase, fPegout), coinbase);
+        test.cache.AddCoin(OUTPOINT, Coin(std::move(output), 1, coinbase), coinbase);
         test.cache.SelfTest();
         GetCoinsMapEntry(test.cache.map(), result_value, result_flags);
     } catch (std::logic_error&) {
@@ -858,7 +800,7 @@ void CheckWriteCoins(CAmount parent_value, CAmount child_value, CAmount expected
     CAmount result_value;
     char result_flags;
     try {
-        WriteCoinsViewEntry(test.cache, test.cache.GetMWEBView() ? std::make_shared<mw::CoinsViewCache>(test.cache.GetMWEBView()) : nullptr, child_value, child_flags);
+        WriteCoinsViewEntry(test.cache, child_value, child_flags);
         test.cache.SelfTest();
         GetCoinsMapEntry(test.cache.map(), result_value, result_flags);
     } catch (std::logic_error&) {

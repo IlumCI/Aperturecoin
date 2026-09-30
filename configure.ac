@@ -1407,8 +1407,6 @@ if test "x$use_zmq" = xyes; then
 fi
 
 
-AC_CHECK_LIB([fmt],[main],MWEB_LIBS=-lfmt,AC_MSG_ERROR(libfmt missing))
-
 dnl univalue check
 
 need_bundled_univalue=yes
@@ -1715,7 +1713,6 @@ AC_SUBST(EVENT_LIBS)
 AC_SUBST(EVENT_PTHREADS_LIBS)
 AC_SUBST(ZMQ_LIBS)
 AC_SUBST(QR_LIBS)
-AC_SUBST(MWEB_LIBS)
 AC_SUBST(HAVE_GMTIME_R)
 AC_SUBST(HAVE_FDATASYNC)
 AC_SUBST(HAVE_FULLFSYNC)
@@ -1762,7 +1759,7 @@ if test x$need_bundled_univalue = xyes; then
   AC_CONFIG_SUBDIRS([src/univalue])
 fi
 
-ac_configure_args="${ac_configure_args} --disable-shared --with-pic --enable-benchmark=no --with-bignum=no --enable-module-generator --enable-module-recovery --enable-module-commitment --enable-module-bulletproof --enable-module-aggsig --enable-module-schnorrsig --enable-module-extrakeys --enable-experimental --disable-jni --disable-openssl-tests"
+ac_configure_args="${ac_configure_args} --disable-shared --with-pic --enable-benchmark=no --with-bignum=no --enable-module-recovery --enable-module-schnorrsig --enable-module-extrakeys --enable-experimental --disable-jni --disable-openssl-tests"
 AC_CONFIG_SUBDIRS([src/secp256k1-zkp])
 
 AC_OUTPUT

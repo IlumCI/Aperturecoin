@@ -51,7 +51,7 @@ class Sv2PoUWTest(BitcoinTestFramework):
         txids = [node.sendembeddingrequest(t)["txid"] for t in TEXTS]
 
         self.log.info("getblocktemplate serves the v2 work")
-        gbt = node.getblocktemplate({"rules": ["segwit", "mweb"]})
+        gbt = node.getblocktemplate({"rules": ["segwit"]})
         assert gbt["version"] & 0x100
         assert_equal(len(gbt["powv2"]["requests"]), len(TEXTS))
         assert_equal(len(gbt["powv2"]["results"]), len(TEXTS))

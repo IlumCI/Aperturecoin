@@ -43,8 +43,8 @@ std::vector<TokenCoin> ListTokenCoins(const CWallet& wallet) EXCLUSIVE_LOCKS_REQ
             const CTxOut& txout{wtx.tx->vout[i]};
             if (!token::HasTokenPrefix(txout.scriptPubKey)) continue;
             const COutPoint outpoint{txid, i};
-            if (wallet.IsSpent(outpoint) || wallet.IsLockedCoin(outpoint)) continue;
-            if (!(wallet.IsMine(CTxOutput{outpoint, txout}) & ISMINE_SPENDABLE)) continue;
+            if (wallet.IsSpent(outpoint.hash, outpoint.n) || wallet.IsLockedCoin(outpoint.hash, outpoint.n)) continue;
+            if (!(wallet.IsMine(txout) & ISMINE_SPENDABLE)) continue;
             token::TokenData td;
             if (token::Parse(txout.scriptPubKey, td) != token::ParseResult::OK) continue;
             coins.push_back({outpoint, txout, td, depth});
@@ -68,7 +68,7 @@ CRecipient TokenRecipient(CWallet& wallet, const token::TokenData& td, const CSc
 {
     const CScript script{token::Encode(td, locking_bytecode)};
     const CAmount value{GetDustThreshold(CTxOut(0, script), wallet.chain().relayDustFee())};
-    return CRecipient{DestinationAddr(script), std::max<CAmount>(value, 1), false};
+    return CRecipient{script, std::max<CAmount>(value, 1), false};
 }
 
 UniValue CreateAndCommit(CWallet& wallet, std::vector<CRecipient>& recipients, const CCoinControl& coin_control) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet)
@@ -155,11 +155,10 @@ RPCHelpMan tokengenesis()
     // Find a spendable, non-token wallet outpoint with index 0.
     std::optional<COutPoint> genesis_outpoint;
     {
-        std::vector<COutputCoin> available;
+        std::vector<COutput> available;
         w.AvailableCoins(available);
-        for (const COutputCoin& coin : available) {
-            if (coin.IsMWEB() || !coin.IsSpendable()) continue;
-            const COutput& out = boost::get<COutput>(coin.m_output);
+        for (const COutput& out : available) {
+            if (!out.fSpendable) continue;
             if (out.i == 0) {
                 genesis_outpoint = COutPoint(out.tx->GetHash(), 0);
                 break;
@@ -169,7 +168,7 @@ RPCHelpMan tokengenesis()
     if (!genesis_outpoint) {
         // Create one: pay ourselves with the recipient output at index 0.
         CCoinControl prep_control;
-        std::vector<CRecipient> prep{{DestinationAddr(NewChangeScript(w)), COIN / 100, false}};
+        std::vector<CRecipient> prep{{NewChangeScript(w), COIN / 100, false}};
         EnsureWalletIsUnlocked(&w);
         CAmount fee{0};
         int change_pos{1};
@@ -414,7 +413,7 @@ RPCHelpMan sendembeddingrequest()
 
     LOCK(w.cs_wallet);
     EnsureWalletIsUnlocked(&w);
-    std::vector<CRecipient> recipients{{DestinationAddr(embed::MakeRequestScript(ids)), 0, false}};
+    std::vector<CRecipient> recipients{{embed::MakeRequestScript(ids), 0, false}};
     CCoinControl coin_control;
     CAmount fee{0};
     int change_pos{-1};

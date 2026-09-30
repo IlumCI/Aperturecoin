@@ -5,7 +5,6 @@
 #ifndef BITCOIN_WALLET_SCRIPTPUBKEYMAN_H
 #define BITCOIN_WALLET_SCRIPTPUBKEYMAN_H
 
-#include <mw/wallet/Keychain.h>
 #include <psbt.h>
 #include <script/descriptor.h>
 #include <script/signingprovider.h>
@@ -23,13 +22,6 @@
 
 enum class OutputType;
 struct bilingual_str;
-
-enum class KeyPurpose : uint32_t
-{
-    EXTERNAL = 0,
-    INTERNAL = 1,
-    MWEB = 100
-};
 
 // Wallet storage things that ScriptPubKeyMans need in order to be able to store things to the wallet database.
 // It provides access to things that are part of the entire wallet and not specific to a ScriptPubKeyMan such as
@@ -54,7 +46,7 @@ public:
 //! Default for -keypool
 static const unsigned int DEFAULT_KEYPOOL_SIZE = 1000;
 
-std::vector<CKeyID> GetAffectedKeys(const DestinationAddr& spk, const SigningProvider& provider);
+std::vector<CKeyID> GetAffectedKeys(const CScript& spk, const SigningProvider& provider);
 
 /** A key from a CWallet's keypool
  *
@@ -116,11 +108,9 @@ public:
     bool fInternal;
     //! Whether this key was generated for a keypool before the wallet was upgraded to HD-split
     bool m_pre_split;
-    //! Whether this keypool entry is in the MWEB keypool
-    bool fMWEB;
 
     CKeyPool();
-    CKeyPool(const CPubKey& vchPubKeyIn, bool internalIn, bool mweb_in);
+    CKeyPool(const CPubKey& vchPubKeyIn, bool internalIn);
 
     template<typename Stream>
     void Serialize(Stream& s) const
@@ -129,7 +119,7 @@ public:
         if (!(s.GetType() & SER_GETHASH)) {
             s << nVersion;
         }
-        s << nTime << vchPubKey << fInternal << m_pre_split << fMWEB;
+        s << nTime << vchPubKey << fInternal << m_pre_split;
     }
 
     template<typename Stream>
@@ -153,13 +143,6 @@ public:
             /* flag as postsplit address if we can't read the m_pre_split boolean
                (this will be the case for any wallet that upgrades to HD chain split) */
             m_pre_split = false;
-        }
-        try {
-            s >> fMWEB;
-        } catch (std::ios_base::failure&) {
-            /* flag as non-MWEB address if we can't read the fMWEB boolean
-               (this will be the case for any wallet that upgrades to HD MWEB) */
-            fMWEB = false;
         }
     }
 };
@@ -186,13 +169,12 @@ class ScriptPubKeyMan
 {
 protected:
     WalletStorage& m_storage;
-    mw::Keychain::Ptr m_mwebKeychain;
 
 public:
-    ScriptPubKeyMan(WalletStorage& storage) : m_storage(storage), m_mwebKeychain(nullptr) {}
+    ScriptPubKeyMan(WalletStorage& storage) : m_storage(storage) {}
     virtual ~ScriptPubKeyMan() {};
     virtual bool GetNewDestination(const OutputType type, CTxDestination& dest, std::string& error) { return false; }
-    virtual isminetype IsMine(const DestinationAddr& script) const { return ISMINE_NO; }
+    virtual isminetype IsMine(const CScript& script) const { return ISMINE_NO; }
 
     //! Check that the given decryption key is valid for this ScriptPubKeyMan, i.e. it decrypts all of the keys handled by it.
     virtual bool CheckDecryptionKey(const CKeyingMaterial& master_key, bool accept_no_keys = false) { return false; }
@@ -200,7 +182,7 @@ public:
 
     virtual bool GetReservedDestination(const OutputType type, bool internal, CTxDestination& address, int64_t& index, CKeyPool& keypool) { return false; }
     virtual void KeepDestination(int64_t index, const OutputType& type) {}
-    virtual void ReturnDestination(int64_t index, const KeyPurpose purpose, const CTxDestination& addr) {}
+    virtual void ReturnDestination(int64_t index, bool internal, const CTxDestination& addr) {}
 
     /** Fills internal address pool. Use within ScriptPubKeyMan implementations should be used sparingly and only
       * when something from the address pool is removed, excluding GetNewDestination and GetReservedDestination.
@@ -209,7 +191,7 @@ public:
     virtual bool TopUp(unsigned int size = 0) { return false; }
 
     //! Mark unused addresses as being used
-    virtual void MarkUnusedAddresses(const DestinationAddr& script) {}
+    virtual void MarkUnusedAddresses(const CScript& script) {}
 
     /** Sets up the key generation stuff, i.e. generates new HD seeds and sets them as active.
       * Returns false if already setup or setup fails, true if setup is successful
@@ -221,7 +203,7 @@ public:
     virtual bool IsHDEnabled() const { return false; }
 
     /* Returns true if the wallet can give out new addresses. This means it has keys in the keypool or can generate new keys */
-    virtual bool CanGetAddresses(const KeyPurpose purpose) const { return false; }
+    virtual bool CanGetAddresses(bool internal = false) const { return false; }
 
     /** Upgrades the wallet to the specified version */
     virtual bool Upgrade(int prev_version, int new_version, bilingual_str& error) { return false; }
@@ -240,12 +222,12 @@ public:
 
     virtual std::unique_ptr<CKeyMetadata> GetMetadata(const CTxDestination& dest) const { return nullptr; }
 
-    virtual std::unique_ptr<SigningProvider> GetSolvingProvider(const DestinationAddr& dest_addr) const { return nullptr; }
+    virtual std::unique_ptr<SigningProvider> GetSolvingProvider(const CScript& script) const { return nullptr; }
 
     /** Whether this ScriptPubKeyMan can provide a SigningProvider (via GetSolvingProvider) that, combined with
       * sigdata, can produce solving data.
       */
-    virtual bool CanProvide(const DestinationAddr& dest_addr, SignatureData& sigdata) { return false; }
+    virtual bool CanProvide(const CScript& script, SignatureData& sigdata) { return false; }
 
     /** Creates new signatures and adds them to the transaction. Returns whether all inputs were signed */
     virtual bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const { return false; }
@@ -257,10 +239,6 @@ public:
     virtual uint256 GetID() const { return uint256(); }
 
     virtual void SetInternal(bool internal) {}
-
-    // Creates an MWEB KeyChain from the appropriate keychain paths.
-    virtual void LoadMWEBKeychain() { }
-    const mw::Keychain::Ptr& GetMWEBKeychain() const noexcept { return m_mwebKeychain; }
 
     /** Prepends the wallet name in logging output to ease debugging in multi-wallet use cases */
     template<typename... Params>
@@ -315,7 +293,7 @@ private:
     //! Adds a key to the store, and saves it to disk.
     bool AddKeyPubKeyWithDB(WalletBatch &batch,const CKey& key, const CPubKey &pubkey) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
 
-    void AddKeypoolPubkeyWithDB(const CPubKey& pubkey, const KeyPurpose purpose, WalletBatch& batch);
+    void AddKeypoolPubkeyWithDB(const CPubKey& pubkey, const bool internal, WalletBatch& batch);
 
     //! Adds a script to the store and saves it to disk
     bool AddCScriptWithDB(WalletBatch& batch, const CScript& script);
@@ -328,12 +306,11 @@ private:
     std::unordered_map<CKeyID, CHDChain, KeyIDHasher> m_inactive_hd_chains;
 
     /* HD derive new child key (on internal or external chain) */
-    void DeriveNewChildKey(WalletBatch& batch, CKeyMetadata& metadata, CKey& secret, CHDChain& hd_chain, const KeyPurpose purpose) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
+    void DeriveNewChildKey(WalletBatch& batch, CKeyMetadata& metadata, CKey& secret, CHDChain& hd_chain, bool internal = false) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
 
     std::set<int64_t> setInternalKeyPool GUARDED_BY(cs_KeyStore);
     std::set<int64_t> setExternalKeyPool GUARDED_BY(cs_KeyStore);
     std::set<int64_t> set_pre_split_keypool GUARDED_BY(cs_KeyStore);
-    std::set<int64_t> set_mweb_keypool GUARDED_BY(cs_KeyStore);
     int64_t m_max_keypool_index GUARDED_BY(cs_KeyStore) = 0;
     std::map<CKeyID, int64_t> m_pool_key_to_index;
     // Tracks keypool indexes to CKeyIDs of keys that have been taken out of the keypool but may be returned to it
@@ -356,7 +333,7 @@ private:
      *     was not found in the wallet, or was misclassified in the internal
      *     or external keypool
      */
-    bool ReserveKeyFromKeyPool(int64_t& nIndex, CKeyPool& keypool, const KeyPurpose purpose);
+    bool ReserveKeyFromKeyPool(int64_t& nIndex, CKeyPool& keypool, bool fRequestedInternal);
 
     /**
      * Like TopUp() but adds keys for inactive HD chains.
@@ -364,28 +341,28 @@ private:
      *
      * @param seed_id the CKeyID for the HD seed.
      * @param index the index to start generating keys from
-     * @param purpose whether the external, internal, or mweb chain should be used.
+     * @param internal whether the internal chain should be used. true for internal chain, false for external chain.
      *
      * @return true if seed was found and keys were derived. false if unable to derive seeds
      */
-    bool TopUpInactiveHDChain(const CKeyID seed_id, int64_t index, const KeyPurpose purpose);
+    bool TopUpInactiveHDChain(const CKeyID seed_id, int64_t index, bool internal);
 
 public:
     using ScriptPubKeyMan::ScriptPubKeyMan;
 
     bool GetNewDestination(const OutputType type, CTxDestination& dest, std::string& error) override;
-    isminetype IsMine(const DestinationAddr& script) const override;
+    isminetype IsMine(const CScript& script) const override;
 
     bool CheckDecryptionKey(const CKeyingMaterial& master_key, bool accept_no_keys = false) override;
     bool Encrypt(const CKeyingMaterial& master_key, WalletBatch* batch) override;
 
     bool GetReservedDestination(const OutputType type, bool internal, CTxDestination& address, int64_t& index, CKeyPool& keypool) override;
     void KeepDestination(int64_t index, const OutputType& type) override;
-    void ReturnDestination(int64_t index, const KeyPurpose purpose, const CTxDestination&) override;
+    void ReturnDestination(int64_t index, bool internal, const CTxDestination&) override;
 
     bool TopUp(unsigned int size = 0) override;
 
-    void MarkUnusedAddresses(const DestinationAddr& script) override;
+    void MarkUnusedAddresses(const CScript& script) override;
 
     //! Upgrade stored CKeyMetadata objects to store key origin info as KeyOriginInfo
     void UpgradeKeyMetadata();
@@ -408,11 +385,11 @@ public:
 
     std::unique_ptr<CKeyMetadata> GetMetadata(const CTxDestination& dest) const override;
 
-    bool CanGetAddresses(const KeyPurpose purpose) const override;
+    bool CanGetAddresses(bool internal = false) const override;
 
-    std::unique_ptr<SigningProvider> GetSolvingProvider(const DestinationAddr& dest_addr) const override;
+    std::unique_ptr<SigningProvider> GetSolvingProvider(const CScript& script) const override;
 
-    bool CanProvide(const DestinationAddr& dest_addr, SignatureData& sigdata) override;
+    bool CanProvide(const CScript& script, SignatureData& sigdata) override;
 
     bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const override;
     SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const override;
@@ -443,7 +420,7 @@ public:
     void LoadKeyMetadata(const CKeyID& keyID, const CKeyMetadata &metadata);
     void LoadScriptMetadata(const CScriptID& script_id, const CKeyMetadata &metadata);
     //! Generate a new key
-    CPubKey GenerateNewKey(WalletBatch& batch, CHDChain& hd_chain, const KeyPurpose purpose) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
+    CPubKey GenerateNewKey(WalletBatch& batch, CHDChain& hd_chain, bool internal = false) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
 
     /* Set the HD chain model (chain child index counters) and writes it to the database */
     void AddHDChain(const CHDChain& chain);
@@ -480,7 +457,7 @@ public:
     bool ImportScripts(const std::set<CScript> scripts, int64_t timestamp) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
     bool ImportPrivKeys(const std::map<CKeyID, CKey>& privkey_map, const int64_t timestamp) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
     bool ImportPubKeys(const std::vector<CKeyID>& ordered_pubkeys, const std::map<CKeyID, CPubKey>& pubkey_map, const std::map<CKeyID, std::pair<CPubKey, KeyOriginInfo>>& key_origins, const bool add_keypool, const bool internal, const int64_t timestamp) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
-    bool ImportScriptPubKeys(const std::set<DestinationAddr>& script_pub_keys, const bool have_solving_data, const int64_t timestamp) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
+    bool ImportScriptPubKeys(const std::set<CScript>& script_pub_keys, const bool have_solving_data, const int64_t timestamp) EXCLUSIVE_LOCKS_REQUIRED(cs_KeyStore);
 
     /* Returns true if the wallet can generate new keys */
     bool CanGenerateKeys() const;
@@ -518,28 +495,6 @@ public:
     const std::map<CKeyID, int64_t>& GetAllReserveKeys() const { return m_pool_key_to_index; }
 
     std::set<CKeyID> GetKeys() const override;
-
-    void LoadMWEBKeychain() override;
-    SecretKey GetScanSecret() const noexcept
-    {
-        if (m_mwebKeychain) {
-            return m_mwebKeychain->GetScanSecret();
-        }
-
-        if (IsHDEnabled() && m_hd_chain.mweb_scan_key) {
-            return *m_hd_chain.mweb_scan_key;
-        }
-        
-        return SecretKey::Null();
-    };
-    SecretKey GetSpendSecret() const noexcept
-    {
-        if (m_mwebKeychain) {
-            return m_mwebKeychain->GetSpendSecret();
-        }
-
-        return SecretKey::Null();
-    };
 };
 
 /** Wraps a LegacyScriptPubKeyMan so that it can be returned in a new unique_ptr. Does not provide privkeys */
@@ -563,7 +518,7 @@ class DescriptorScriptPubKeyMan : public ScriptPubKeyMan
 private:
     WalletDescriptor m_wallet_descriptor GUARDED_BY(cs_desc_man);
 
-    using ScriptPubKeyMap = std::map<DestinationAddr, int32_t>; // Map of scripts to descriptor range index
+    using ScriptPubKeyMap = std::map<CScript, int32_t>; // Map of scripts to descriptor range index
     using PubKeyMap = std::map<CPubKey, int32_t>; // Map of pubkeys involved in scripts to descriptor range index
     using CryptedKeyMap = std::map<CKeyID, std::pair<CPubKey, std::vector<unsigned char>>>;
     using KeyMap = std::map<CKeyID, CKey>;
@@ -604,13 +559,13 @@ public:
     mutable RecursiveMutex cs_desc_man;
 
     bool GetNewDestination(const OutputType type, CTxDestination& dest, std::string& error) override;
-    isminetype IsMine(const DestinationAddr& script) const override;
+    isminetype IsMine(const CScript& script) const override;
 
     bool CheckDecryptionKey(const CKeyingMaterial& master_key, bool accept_no_keys = false) override;
     bool Encrypt(const CKeyingMaterial& master_key, WalletBatch* batch) override;
 
     bool GetReservedDestination(const OutputType type, bool internal, CTxDestination& address, int64_t& index, CKeyPool& keypool) override;
-    void ReturnDestination(int64_t index, const KeyPurpose purpose, const CTxDestination& addr) override;
+    void ReturnDestination(int64_t index, bool internal, const CTxDestination& addr) override;
 
     // Tops up the descriptor cache and m_map_script_pub_keys. The cache is stored in the wallet file
     // and is used to expand the descriptor in GetNewDestination. DescriptorScriptPubKeyMan relies
@@ -618,7 +573,7 @@ public:
     // (with or without private keys), the "keypool" is a single xpub.
     bool TopUp(unsigned int size = 0) override;
 
-    void MarkUnusedAddresses(const DestinationAddr& script) override;
+    void MarkUnusedAddresses(const CScript& script) override;
 
     bool IsHDEnabled() const override;
 
@@ -635,11 +590,11 @@ public:
 
     std::unique_ptr<CKeyMetadata> GetMetadata(const CTxDestination& dest) const override;
 
-    bool CanGetAddresses(const KeyPurpose purpose) const override;
+    bool CanGetAddresses(bool internal = false) const override;
 
-    std::unique_ptr<SigningProvider> GetSolvingProvider(const DestinationAddr& dest_addr) const override;
+    std::unique_ptr<SigningProvider> GetSolvingProvider(const CScript& script) const override;
 
-    bool CanProvide(const DestinationAddr& dest_addr, SignatureData& sigdata) override;
+    bool CanProvide(const CScript& script, SignatureData& sigdata) override;
 
     bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const override;
     SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const override;
@@ -659,7 +614,7 @@ public:
     void WriteDescriptor();
 
     const WalletDescriptor GetWalletDescriptor() const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
-    const std::vector<DestinationAddr> GetScriptPubKeys() const;
+    const std::vector<CScript> GetScriptPubKeys() const;
 };
 
 #endif // BITCOIN_WALLET_SCRIPTPUBKEYMAN_H

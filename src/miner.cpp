@@ -19,7 +19,6 @@
 #include <consensus/merkle.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
-#include <mw/consensus/Params.h>
 #include <policy/feerate.h>
 #include <policy/policy.h>
 #include <pow.h>
@@ -30,11 +29,6 @@
 
 #include <algorithm>
 #include <utility>
-
-static size_t GetMWEBInputCount(const CTransaction& tx)
-{
-    return tx.HasMWEBTx() ? tx.mweb_tx.m_transaction->GetInputs().size() : 0;
-}
 
 int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParams, const CBlockIndex* pindexPrev)
 {
@@ -176,12 +170,9 @@ void BlockAssembler::resetBlock()
     // Reserve space for coinbase tx
     nBlockWeight = 4000;
     nBlockSigOpsCost = 400;
-    nBlockMWEBWeight = 0;
-    nBlockMWEBInputs = 0;
     nBlockRequests = 0;
     fPowV2 = false;
     fIncludeWitness = false;
-    fIncludeMWEB = false;
 
     // These counters do not include coinbase tx
     nBlockTx = 0;
@@ -190,7 +181,6 @@ void BlockAssembler::resetBlock()
 
 Optional<int64_t> BlockAssembler::m_last_block_num_txs{nullopt};
 Optional<int64_t> BlockAssembler::m_last_block_weight{nullopt};
-Optional<int64_t> BlockAssembler::m_last_block_mweb_weight{nullopt};
 
 std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& scriptPubKeyIn)
 {
@@ -238,26 +228,16 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     // transaction (which in most cases can be a no-op).
     fIncludeWitness = IsWitnessEnabled(pindexPrev, chainparams.GetConsensus());
 
-    fIncludeMWEB = IsMWEBEnabled(pindexPrev, chainparams.GetConsensus());
-    if (fIncludeMWEB) {
-        mweb_miner.NewBlock(nHeight);
-    }
-
     fPowV2 = nHeight >= chainparams.GetConsensus().nPowV2Height;
 
     int nPackagesSelected = 0;
     int nDescendantsUpdated = 0;
     addPackageTxs(nPackagesSelected, nDescendantsUpdated);
 
-    if (fIncludeMWEB) {
-        mweb_miner.AddHogExTransaction(pindexPrev, pblock, pblocktemplate.get(), nFees);
-    }
-
     int64_t nTime1 = GetTimeMicros();
 
     m_last_block_num_txs = nBlockTx;
     m_last_block_weight = nBlockWeight;
-    m_last_block_mweb_weight = nBlockMWEBWeight;
 
     // Create coinbase transaction.
     CMutableTransaction coinbaseTx;
@@ -283,7 +263,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     pblocktemplate->vchCoinbaseCommitment = GenerateCoinbaseCommitment(*pblock, pindexPrev, chainparams.GetConsensus());
     pblocktemplate->vTxFees[0] = -nFees;
 
-    LogPrintf("CreateNewBlock(): block weight: %u txs: %u fees: %ld sigops: %d MWEB weight: %u\n", GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost, nBlockMWEBWeight);
+    LogPrintf("CreateNewBlock(): block weight: %u txs: %u fees: %ld sigops %d\n", GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
 
     // Fill in header
     pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
@@ -316,41 +296,27 @@ void BlockAssembler::onlyUnconfirmed(CTxMemPool::setEntries& testSet)
     }
 }
 
-bool BlockAssembler::TestPackage(uint64_t packageSize, int64_t packageSigOpsCost, int64_t packageMWEBWeight) const
+bool BlockAssembler::TestPackage(uint64_t packageSize, int64_t packageSigOpsCost) const
 {
     // TODO: switch to weight-based accounting for packages instead of vsize-based accounting.
     if (nBlockWeight + WITNESS_SCALE_FACTOR * packageSize >= nBlockMaxWeight)
         return false;
     if (nBlockSigOpsCost + packageSigOpsCost >= MAX_BLOCK_SIGOPS_COST)
         return false;
-    if (nBlockMWEBWeight + packageMWEBWeight >= mw::MAX_MINE_WEIGHT)
-        return false;
     return true;
-}
-
-bool BlockAssembler::TestPackageMWEBInputs(uint64_t packageMWEBInputs) const
-{
-    return nBlockMWEBInputs <= mw::MAX_NUM_INPUTS &&
-           packageMWEBInputs <= mw::MAX_NUM_INPUTS - nBlockMWEBInputs;
 }
 
 // Perform transaction-level checks before adding to block:
 // - transaction finality (locktime)
 // - premature witness (in case segwit transactions are added to mempool before
 //   segwit activation)
-bool BlockAssembler::TestPackageTransactions(const CTxMemPool::setEntries& package, const CTxMemPool::setEntries& failedTxs)
+bool BlockAssembler::TestPackageTransactions(const CTxMemPool::setEntries& package)
 {
     for (CTxMemPool::txiter it : package) {
         if (!IsFinalTx(it->GetTx(), nHeight, nLockTimeCutoff))
             return false;
         if (!fIncludeWitness && it->GetTx().HasWitness())
             return false;
-        if (!fIncludeMWEB && it->GetTx().HasMWEBTx()) {
-            return false;
-        }
-        if (failedTxs.count(it) > 0) {
-            return false;
-        }
     }
     if (fPowV2) {
         unsigned int requests = 0;
@@ -362,68 +328,34 @@ bool BlockAssembler::TestPackageTransactions(const CTxMemPool::setEntries& packa
     return true;
 }
 
-bool BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
+void BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
 {
-    if (iter->GetTx().HasMWEBTx() && !mweb_miner.AddMWEBTransaction(iter)) {
-        return false;
-    }
-
-    CTransactionRef pTx = iter->GetSharedTx();
-    if (!pTx->IsMWEBOnly()) {
-        CAmount hogex_fee = 0;
-        int64_t hogex_sigops = 0;
-
-        if (pTx->HasMWEBTx()) {
-            const auto tx_fee = pTx->mweb_tx.GetFee();
-            if (!tx_fee || *tx_fee > iter->GetFee()) {
-                LogPrintf("Invalid MWEB fee amount\n");
-                return false;
-            }
-
-            hogex_fee = *tx_fee;
-            hogex_sigops = MWEB::Miner::GetHogExSigOpCost(*pTx);
-            if (hogex_sigops > iter->GetSigOpCost()) {
-                LogPrintf("Invalid MWEB sigop cost\n");
-                return false;
-            }
-
-            CMutableTransaction mutable_tx(*pTx);
-            mutable_tx.mweb_tx.SetNull();
-            pTx = MakeTransactionRef(std::move(mutable_tx));
-        }
-
-        if (fPowV2) {
-            // Each request adds a coinbase result (embedding + framing).
-            const intmodel::IntModel* model = embed::GetProtocolModel();
-            const uint64_t result_weight = model ? WITNESS_SCALE_FACTOR * (model->Config().hidden_size + 32 * (model->Config().num_hidden_layers + 1) + 100) : 0;
-            for (const CTxOut& out : pTx->vout) {
-                if (embed::IsRequestScript(out.scriptPubKey)) {
-                    ++nBlockRequests;
-                    nBlockWeight += result_weight;
-                }
+    if (fPowV2) {
+        // Each request adds a coinbase result (embedding + framing).
+        const intmodel::IntModel* model = embed::GetProtocolModel();
+        const uint64_t result_weight = model ? WITNESS_SCALE_FACTOR * (model->Config().hidden_size + 32 * (model->Config().num_hidden_layers + 1) + 100) : 0;
+        for (const CTxOut& out : iter->GetTx().vout) {
+            if (embed::IsRequestScript(out.scriptPubKey)) {
+                ++nBlockRequests;
+                nBlockWeight += result_weight;
             }
         }
-        pblocktemplate->block.vtx.emplace_back(pTx);
-        pblocktemplate->vTxFees.push_back(iter->GetFee() - hogex_fee);
-        pblocktemplate->vTxSigOpsCost.push_back(iter->GetSigOpCost() - hogex_sigops);
-        ++nBlockTx;
     }
-
+    pblocktemplate->block.vtx.emplace_back(iter->GetSharedTx());
+    pblocktemplate->vTxFees.push_back(iter->GetFee());
+    pblocktemplate->vTxSigOpsCost.push_back(iter->GetSigOpCost());
     nBlockWeight += iter->GetTxWeight();
+    ++nBlockTx;
     nBlockSigOpsCost += iter->GetSigOpCost();
-    nBlockMWEBWeight += iter->GetMWEBWeight();
-    nBlockMWEBInputs += GetMWEBInputCount(iter->GetTx());
     nFees += iter->GetFee();
     inBlock.insert(iter);
 
     bool fPrintPriority = gArgs.GetBoolArg("-printpriority", DEFAULT_PRINTPRIORITY);
     if (fPrintPriority) {
         LogPrintf("fee %s txid %s\n",
-                  CFeeRate(iter->GetModifiedFee(), iter->GetTxSize(), iter->GetMWEBWeight()).ToString(),
+                  CFeeRate(iter->GetModifiedFee(), iter->GetTxSize()).ToString(),
                   iter->GetTx().GetHash().ToString());
     }
-
-    return true;
 }
 
 int BlockAssembler::UpdatePackagesForAdded(const CTxMemPool::setEntries& alreadyAdded,
@@ -444,7 +376,6 @@ int BlockAssembler::UpdatePackagesForAdded(const CTxMemPool::setEntries& already
                 modEntry.nSizeWithAncestors -= it->GetTxSize();
                 modEntry.nModFeesWithAncestors -= it->GetModifiedFee();
                 modEntry.nSigOpCostWithAncestors -= it->GetSigOpCost();
-                modEntry.nMWEBWeightWithAncestors -= it->GetMWEBWeight();
                 mapModifiedTx.insert(modEntry);
             } else {
                 mapModifiedTx.modify(mit, update_for_parent_inclusion(it));
@@ -552,20 +483,18 @@ void BlockAssembler::addPackageTxs(int &nPackagesSelected, int &nDescendantsUpda
         uint64_t packageSize = iter->GetSizeWithAncestors();
         CAmount packageFees = iter->GetModFeesWithAncestors();
         int64_t packageSigOpsCost = iter->GetSigOpCostWithAncestors();
-        int64_t packageMWEBWeight = iter->GetMWEBWeightWithAncestors();
         if (fUsingModified) {
             packageSize = modit->nSizeWithAncestors;
             packageFees = modit->nModFeesWithAncestors;
             packageSigOpsCost = modit->nSigOpCostWithAncestors;
-            packageMWEBWeight = modit->nMWEBWeightWithAncestors;
         }
 
-        if (packageFees < blockMinFeeRate.GetTotalFee(packageSize, packageMWEBWeight)) {
+        if (packageFees < blockMinFeeRate.GetFee(packageSize)) {
             // Everything else we might consider has a lower fee rate
             return;
         }
 
-        if (!TestPackage(packageSize, packageSigOpsCost, packageMWEBWeight)) {
+        if (!TestPackage(packageSize, packageSigOpsCost)) {
             if (fUsingModified) {
                 // Since we always look at the best entry in mapModifiedTx,
                 // we must erase failed entries so that we can consider the
@@ -592,28 +521,8 @@ void BlockAssembler::addPackageTxs(int &nPackagesSelected, int &nDescendantsUpda
         onlyUnconfirmed(ancestors);
         ancestors.insert(iter);
 
-        uint64_t packageMWEBInputs = 0;
-        for (CTxMemPool::txiter packageTx : ancestors) {
-            packageMWEBInputs += GetMWEBInputCount(packageTx->GetTx());
-        }
-
-        if (!TestPackageMWEBInputs(packageMWEBInputs)) {
-            if (fUsingModified) {
-                mapModifiedTx.get<ancestor_score>().erase(modit);
-                failedTx.insert(iter);
-            }
-
-            ++nConsecutiveFailed;
-
-            if (nConsecutiveFailed > MAX_CONSECUTIVE_FAILURES && nBlockWeight >
-                    nBlockMaxWeight - 4000) {
-                break;
-            }
-            continue;
-        }
-
-        // Test if all tx's are Final, and none have failed
-        if (!TestPackageTransactions(ancestors, failedTx)) {
+        // Test if all tx's are Final
+        if (!TestPackageTransactions(ancestors)) {
             if (fUsingModified) {
                 mapModifiedTx.get<ancestor_score>().erase(modit);
                 failedTx.insert(iter);
@@ -628,28 +537,16 @@ void BlockAssembler::addPackageTxs(int &nPackagesSelected, int &nDescendantsUpda
         std::vector<CTxMemPool::txiter> sortedEntries;
         SortForBlock(ancestors, sortedEntries);
 
-        bool failed = false;
         for (size_t i=0; i<sortedEntries.size(); ++i) {
-            failed = !AddToBlock(sortedEntries[i]);
-            if (failed) {
-                for (size_t j = i; j < sortedEntries.size(); j++) {
-                    failedTx.insert(sortedEntries[j]);
-                    mapModifiedTx.erase(sortedEntries[j]);
-                }
-
-                break;
-            }
-
+            AddToBlock(sortedEntries[i]);
             // Erase from the modified set, if present
             mapModifiedTx.erase(sortedEntries[i]);
         }
 
         ++nPackagesSelected;
 
-        if (!failed) {
-            // Update transactions that depend on each of these
-            nDescendantsUpdated += UpdatePackagesForAdded(ancestors, mapModifiedTx);
-        }
+        // Update transactions that depend on each of these
+        nDescendantsUpdated += UpdatePackagesForAdded(ancestors, mapModifiedTx);
     }
 }
 

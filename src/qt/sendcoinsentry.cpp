@@ -95,14 +95,9 @@ void SendCoinsEntry::clear()
 {
     // clear UI elements for normal payment
     ui->payTo->clear();
-    ui->payTo->setReadOnly(false);
-    ui->payTo->setValidating(true);
-    pegInAddress.clear();
-    pegout = false;
     ui->addAsLabel->clear();
     ui->payAmount->clear();
     ui->checkboxSubtractFeeFromAmount->setCheckState(Qt::Unchecked);
-    ui->checkboxSubtractFeeFromAmount->setEnabled(true);
     ui->messageTextLabel->clear();
     ui->messageTextLabel->hide();
     ui->messageLabel->hide();
@@ -121,7 +116,6 @@ void SendCoinsEntry::clear()
 
 void SendCoinsEntry::checkSubtractFeeFromAmount()
 {
-    if (pegInAddress.size() || pegout) return;
     ui->checkboxSubtractFeeFromAmount->setChecked(true);
 }
 
@@ -143,7 +137,7 @@ bool SendCoinsEntry::validate(interfaces::Node& node)
     // Check input validity
     bool retval = true;
 
-    if (pegInAddress.empty() && !pegout && !model->validateAddress(ui->payTo->text()))
+    if (!model->validateAddress(ui->payTo->text()))
     {
         ui->payTo->setValid(false);
         retval = false;
@@ -167,38 +161,16 @@ bool SendCoinsEntry::validate(interfaces::Node& node)
         retval = false;
     }
 
-    if (retval && GUIUtil::isMWEBAddressBeforeActivated(node, ui->payTo->text())) {
-        ui->payTo->setValid(false);
-        retval = false;
-
-        QMessageBox msgBox;
-        msgBox.setInformativeText("You cannot send to an MWEB address until after the feature has been activated.");
-        msgBox.setStandardButtons(QMessageBox::Ok);
-        msgBox.setDefaultButton(QMessageBox::Ok);
-        msgBox.exec();
-    }
-
     return retval;
 }
 
 SendCoinsRecipient SendCoinsEntry::getValue()
 {
-    if (pegInAddress.size()) {
-        recipient.address = QString::fromStdString(pegInAddress);
-        recipient.type = SendCoinsRecipient::MWEB_PEGIN;
-    } else if (pegout) {
-        recipient.address = QString::fromStdString(""); // This will be populated later
-        recipient.type = SendCoinsRecipient::MWEB_PEGOUT;
-    } else {
-        // Normal payment
-        recipient.address = ui->payTo->text();
-        recipient.type = SendCoinsRecipient::REGULAR;
-    }
+    recipient.address = ui->payTo->text();
     recipient.label = ui->addAsLabel->text();
     recipient.amount = ui->payAmount->value();
     recipient.message = ui->messageTextLabel->text();
     recipient.fSubtractFeeFromAmount = (ui->checkboxSubtractFeeFromAmount->checkState() == Qt::Checked);
-    recipient.reserved_dest = nullptr;
 
     return recipient;
 }
@@ -241,40 +213,6 @@ void SendCoinsEntry::setAddress(const QString &address)
 void SendCoinsEntry::setAmount(const CAmount &amount)
 {
     ui->payAmount->setValue(amount);
-}
-
-void SendCoinsEntry::setPegInAddress(const std::string& address)
-{
-    pegInAddress = address;
-    pegout = false;
-
-    if (address.empty()) {
-        setAddress("");
-        ui->payTo->setReadOnly(false);
-        ui->payTo->setValidating(true);
-    } else {
-        setAddress(QString::fromStdString("Peg-In: " + address));
-        ui->payTo->setReadOnly(true);
-        ui->payTo->setValidating(false);
-        ui->payTo->setCursorPosition(0);
-    }
-}
-
-void SendCoinsEntry::setPegOut(const bool pegout_set)
-{
-    pegInAddress = "";
-    pegout = pegout_set;
-
-    if (!pegout_set) {
-        setAddress("");
-        ui->payTo->setReadOnly(false);
-        ui->payTo->setValidating(true);
-    } else {
-        setAddress(QString::fromStdString("Peg-Out Address"));
-        ui->payTo->setReadOnly(true);
-        ui->payTo->setValidating(false);
-        ui->payTo->setCursorPosition(0);
-    }
 }
 
 bool SendCoinsEntry::isClear()
