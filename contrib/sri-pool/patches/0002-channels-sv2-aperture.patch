@@ -1,0 +1,235 @@
+diff -ruN '--exclude=target' stratum/sv2/channels-sv2/Cargo.toml sv2-apps/aperture/stratum-patches/channels-sv2/Cargo.toml
+--- a/Cargo.toml	2026-09-30 15:58:04.088655178 +0000
++++ b/Cargo.toml	2026-09-30 16:00:30.118815735 +0000
+@@ -4,7 +4,7 @@
+ authors = ["The Stratum V2 Developers"]
+ edition = "2021"
+ readme = "README.md"
+-description = "Sv2 Channel Primitives"
++description = "Sv2 Channel Primitives (ApertureCoin: ApertureMatMul share validation)"
+ documentation = "https://docs.rs/channels_sv2"
+ license = "MIT OR Apache-2.0"
+ repository = "https://github.com/stratum-mining/stratum"
+@@ -14,13 +14,15 @@
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
+-binary_sv2 = { path = "../binary-sv2", version = "^7.0.0" }
+-mining_sv2 = { path = "../subprotocols/mining", version = "^12.0.0" }
+-template_distribution_sv2 = { path = "../subprotocols/template-distribution", version = "^7.0.0" }
+-tracing = { workspace = true }
+-bitcoin = { workspace = true }
+-primitive-types = { workspace = true }
+-hashbrown = { workspace = true, optional = true }
++binary_sv2 = { git = "https://github.com/stratum-mining/stratum", branch = "main" }
++mining_sv2 = { git = "https://github.com/stratum-mining/stratum", branch = "main" }
++template_distribution_sv2 = { git = "https://github.com/stratum-mining/stratum", branch = "main" }
++tracing = "0.1"
++bitcoin = "0.32.5"
++primitive-types = "0.13.1"
++hashbrown = { version = "0.15.5", optional = true }
++# ApertureCoin: ApertureMatMul proof of work for share validation.
++aperture_pow = { path = "../../aperture-pow" }
+ 
+ 
+ [features]
+diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/aperture.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/aperture.rs
+--- a/src/aperture.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/src/aperture.rs	2026-09-30 16:07:25.837707407 +0000
+@@ -0,0 +1,81 @@
++//! ApertureCoin proof of work for share validation (ApertureMatMul, see the
++//! `aperture_pow` crate). The pool, JD client and translator all validate
++//! shares through the channel types in this crate, so this is the single
++//! place where the header's proof-of-work hash is computed.
++
++use bitcoin::{block::Header, hashes::Hash, BlockHash};
++
++#[cfg(test)]
++thread_local! {
++    /// The upstream unit tests of this crate use nonces mined for double-SHA256.
++    /// They keep testing channel logic unchanged; ApertureMatMul is covered by
++    /// the tests below, which switch this off for their own thread.
++    pub(crate) static SHA256D_FOR_UPSTREAM_TESTS: core::cell::Cell<bool> = const { core::cell::Cell::new(true) };
++}
++
++/// ApertureMatMul proof-of-work hash of a header, typed as a `BlockHash` so the
++/// existing target comparisons (`Target::is_met_by`, little-endian) apply.
++pub fn pow_block_hash(header: &Header) -> BlockHash {
++    #[cfg(test)]
++    if SHA256D_FOR_UPSTREAM_TESTS.with(|c| c.get()) {
++        return header.block_hash();
++    }
++    let raw = bitcoin::consensus::serialize(header);
++    let bytes: [u8; 80] = raw.as_slice().try_into().expect("block headers serialize to 80 bytes");
++    BlockHash::from_byte_array(aperture_pow::pow_hash(&bytes))
++}
++
++/// Set the network's ApertureMatMul matrix dimension (512 main/test, 32 regtest).
++pub fn set_pow_dim(n: u32) {
++    aperture_pow::set_dim(n);
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use bitcoin::{block::Version, CompactTarget, Target, TxMerkleNode};
++
++    fn header(nonce: u32) -> Header {
++        Header {
++            version: Version::from_consensus(0x2000_0000),
++            prev_blockhash: BlockHash::from_byte_array([7u8; 32]),
++            merkle_root: TxMerkleNode::from_byte_array([9u8; 32]),
++            time: 1_790_640_000,
++            bits: CompactTarget::from_consensus(0x207f_ffff),
++            nonce,
++        }
++    }
++
++    #[test]
++    fn pow_is_apertures_matmul_not_sha256d() {
++        SHA256D_FOR_UPSTREAM_TESTS.with(|c| c.set(false));
++        aperture_pow::set_dim(32);
++        let h = header(42);
++        let raw: [u8; 80] = bitcoin::consensus::serialize(&h).try_into().unwrap();
++        assert_eq!(pow_block_hash(&h).to_byte_array(), aperture_pow::matmul_v1(&raw, 32));
++        assert_ne!(pow_block_hash(&h), h.block_hash());
++    }
++
++    #[test]
++    fn targets_compare_the_matmul_hash() {
++        SHA256D_FOR_UPSTREAM_TESTS.with(|c| c.set(false));
++        aperture_pow::set_dim(32);
++        // A share target of 1/16: find a nonce that meets it by ApertureMatMul
++        // and check that the decision differs from double-SHA256 somewhere.
++        let target = Target::from_le_bytes({
++            let mut t = [0xffu8; 32];
++            t[31] = 0x0f;
++            t
++        });
++        let mut differs = false;
++        let mut found = false;
++        for nonce in 0..400 {
++            let h = header(nonce);
++            let by_matmul = target.is_met_by(pow_block_hash(&h));
++            let by_sha = target.is_met_by(h.block_hash());
++            found |= by_matmul;
++            differs |= by_matmul != by_sha;
++        }
++        assert!(found && differs);
++    }
++}
+diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/client/extended.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/client/extended.rs
+--- a/src/client/extended.rs	2026-09-30 15:58:04.089720256 +0000
++++ b/src/client/extended.rs	2026-09-30 16:00:52.582090796 +0000
+@@ -942,7 +942,10 @@
+         };
+ 
+         // convert the header hash to a target type for easy comparison
+-        let share_hash = header.block_hash();
++        // ApertureCoin: shares and blocks are judged by the ApertureMatMul proof-of-work
++        // hash; the double-SHA256 header hash stays the block identifier.
++        let block_id = header.block_hash();
++        let share_hash = crate::aperture::pow_block_hash(&header);
+         let raw_share_hash: [u8; 32] = *share_hash.to_raw_hash().as_ref();
+         let share_hash_target = Target::from_le_bytes(raw_share_hash);
+         let share_hash_as_diff = share_hash_target.difficulty_float();
+@@ -977,7 +980,7 @@
+                 job_target.difficulty_float(),
+             );
+             self.share_accounting.increment_blocks_found();
+-            return Ok(ShareValidationResult::BlockFound(share_hash.to_raw_hash()));
++            return Ok(ShareValidationResult::BlockFound(block_id.to_raw_hash()));
+         }
+ 
+         // check if the share hash meets the job target
+diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/client/standard.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/client/standard.rs
+--- a/src/client/standard.rs	2026-09-30 15:58:04.089720256 +0000
++++ b/src/client/standard.rs	2026-09-30 16:00:52.581235353 +0000
+@@ -719,7 +719,10 @@
+         };
+ 
+         // convert the header hash to a target type for easy comparison
+-        let share_hash = header.block_hash();
++        // ApertureCoin: shares and blocks are judged by the ApertureMatMul proof-of-work
++        // hash; the double-SHA256 header hash stays the block identifier.
++        let block_id = header.block_hash();
++        let share_hash = crate::aperture::pow_block_hash(&header);
+         let raw_share_hash: [u8; 32] = *share_hash.to_raw_hash().as_ref();
+         let share_hash_target = Target::from_le_bytes(raw_share_hash);
+         let share_hash_as_diff = share_hash_target.difficulty_float();
+@@ -754,7 +757,7 @@
+                 job_target.difficulty_float(),
+             );
+             self.share_accounting.increment_blocks_found();
+-            return Ok(ShareValidationResult::BlockFound(share_hash.to_raw_hash()));
++            return Ok(ShareValidationResult::BlockFound(block_id.to_raw_hash()));
+         }
+ 
+         // check if the share hash meets the job target
+diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/lib.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/lib.rs
+--- a/src/lib.rs	2026-09-30 15:58:04.090937766 +0000
++++ b/src/lib.rs	2026-09-30 16:00:52.594063475 +0000
+@@ -15,6 +15,7 @@
+ //! - [`client`] module is `no_std` compatible. To enable it build the crate with `no_std` feature.
+ #![cfg_attr(feature = "no_std", no_std)]
+ 
++pub mod aperture;
+ pub mod extranonce_manager;
+ pub use extranonce_manager::MAX_EXTRANONCE_LEN;
+ 
+diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/server/extended.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/server/extended.rs
+--- a/src/server/extended.rs	2026-09-30 15:58:04.091364217 +0000
++++ b/src/server/extended.rs	2026-09-30 16:00:52.580308931 +0000
+@@ -1057,7 +1057,10 @@
+         };
+ 
+         // convert the header hash to a target type for easy comparison
+-        let share_hash = header.block_hash();
++        // ApertureCoin: shares and blocks are judged by the ApertureMatMul proof-of-work
++        // hash; the double-SHA256 header hash stays the block identifier.
++        let block_id = header.block_hash();
++        let share_hash = crate::aperture::pow_block_hash(&header);
+         let raw_share_hash: [u8; 32] = *share_hash.to_raw_hash().as_ref();
+         let share_hash_target = Target::from_le_bytes(raw_share_hash);
+         let share_hash_as_diff = share_hash_target.difficulty_float();
+@@ -1104,14 +1107,14 @@
+                 JobOrigin::NewTemplate(template) => {
+                     let template_id = template.template_id;
+                     return Ok(ShareValidationResult::BlockFound(
+-                        share_hash.to_raw_hash(),
++                        block_id.to_raw_hash(),
+                         Some(template_id),
+                         coinbase,
+                     ));
+                 }
+                 JobOrigin::SetCustomMiningJob(_set_custom_mining_job) => {
+                     return Ok(ShareValidationResult::BlockFound(
+-                        share_hash.to_raw_hash(),
++                        block_id.to_raw_hash(),
+                         None,
+                         coinbase,
+                     ));
+diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/server/standard.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/server/standard.rs
+--- a/src/server/standard.rs	2026-09-30 15:58:04.092527788 +0000
++++ b/src/server/standard.rs	2026-09-30 16:00:52.577830889 +0000
+@@ -887,7 +887,10 @@
+         };
+ 
+         // convert the header hash to a target type for easy comparison
+-        let share_hash = header.block_hash();
++        // ApertureCoin: shares and blocks are judged by the ApertureMatMul proof-of-work
++        // hash; the double-SHA256 header hash stays the block identifier.
++        let block_id = header.block_hash();
++        let share_hash = crate::aperture::pow_block_hash(&header);
+         let share_raw_hash: [u8; 32] = *share_hash.to_raw_hash().as_ref();
+         let share_hash_target = Target::from_le_bytes(share_raw_hash);
+         let share_hash_as_diff = share_hash_target.difficulty_float();
+@@ -956,7 +959,7 @@
+                 .map_err(|_| ShareValidationError::InvalidCoinbase)?;
+ 
+             return Ok(ShareValidationResult::BlockFound(
+-                share_hash.to_raw_hash(),
++                block_id.to_raw_hash(),
+                 Some(job.get_template().template_id),
+                 serialized_coinbase,
+             ));

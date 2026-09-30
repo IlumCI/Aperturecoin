@@ -1,0 +1,4 @@
+# stratum-mining/sv2-apps
+SV2_APPS=9d7b18f113903f0efbb6904d32cede8adb778146
+# stratum-mining/stratum (channels_sv2 source; same commit Cargo.lock pins)
+STRATUM=28149a84d85fc3d0101202204c627389cb2d52ce

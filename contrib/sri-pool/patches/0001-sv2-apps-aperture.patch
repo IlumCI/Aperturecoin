@@ -1,0 +1,695 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index e78173c9..6386f161 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -141,6 +141,13 @@ version = "1.0.102"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+ 
++[[package]]
++name = "aperture_pow"
++version = "0.1.0"
++dependencies = [
++ "blake3",
++]
++
+ [[package]]
+ name = "arbitrary"
+ version = "1.4.2"
+@@ -1173,6 +1180,19 @@ dependencies = [
+  "wyz",
+ ]
+ 
++[[package]]
++name = "blake3"
++version = "1.8.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
++dependencies = [
++ "arrayvec",
++ "cc",
++ "cfg-if",
++ "constant_time_eq",
++ "cpufeatures 0.3.0",
++]
++
+ [[package]]
+ name = "block-buffer"
+ version = "0.9.0"
+@@ -1362,8 +1382,8 @@ dependencies = [
+ [[package]]
+ name = "channels_sv2"
+ version = "8.0.0"
+-source = "git+https://github.com/stratum-mining/stratum?branch=main#28149a84d85fc3d0101202204c627389cb2d52ce"
+ dependencies = [
++ "aperture_pow",
+  "binary_sv2",
+  "bitcoin",
+  "mining_sv2",
+@@ -1609,6 +1629,12 @@ dependencies = [
+  "unicode-xid",
+ ]
+ 
++[[package]]
++name = "constant_time_eq"
++version = "0.4.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
++
+ [[package]]
+ name = "convert_case"
+ version = "0.6.0"
+@@ -3552,6 +3578,7 @@ dependencies = [
+ name = "pool_sv2"
+ version = "0.7.1"
+ dependencies = [
++ "aperture_pow",
+  "async-channel 1.9.0",
+  "clap",
+  "hex",
+diff --git a/Cargo.toml b/Cargo.toml
+index 180dcaea..d34544d3 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -2,6 +2,7 @@
+ resolver = "3"
+ 
+ members = [
++    "aperture/aperture-pow",
+     "bitcoin-core-sv2",
+     "stratum-apps",
+     "pool-apps/pool",
+@@ -15,6 +16,7 @@ members = [
+ # they are run explicitly with `-p integration_tests_sv2` rather than being
+ # picked up by a bare `cargo build`/`cargo test` at the repository root.
+ default-members = [
++    "aperture/aperture-pow",
+     "bitcoin-core-sv2",
+     "stratum-apps",
+     "pool-apps/pool",
+@@ -22,3 +24,9 @@ default-members = [
+     "miner-apps/jd-client",
+     "miner-apps/translator",
+ ]
++
++# ApertureCoin: share validation uses ApertureMatMul instead of double-SHA256.
++# Only the modified crate of the stratum repository is vendored; everything
++# else still comes from the pinned upstream commit.
++[patch."https://github.com/stratum-mining/stratum"]
++channels_sv2 = { path = "aperture/stratum-patches/channels-sv2" }
+diff --git a/README.md b/README.md
+index 0a0c5469..98b92c6d 100644
+--- a/README.md
++++ b/README.md
+@@ -15,6 +15,9 @@ SV2 Applications
+   </a>
+ </p>
+ 
++> **ApertureCoin fork.** This fork mines [ApertureCoin](https://github.com/IlumCI/Aperturecoin)
++> (ApertureMatMul proof of work, ApertureCoin addresses). See [`aperture/README.md`](aperture/README.md).
++
+ # SV2 Apps Repository
+ 
+ This repository contains the application-level crates, currently in **alpha** stage.
+diff --git a/aperture/README.md b/aperture/README.md
+new file mode 100644
+index 00000000..741d019d
+--- /dev/null
++++ b/aperture/README.md
+@@ -0,0 +1,79 @@
++# ApertureCoin fork of the SRI applications
++
++This fork of [stratum-mining/sv2-apps](https://github.com/stratum-mining/sv2-apps)
++runs the Stratum V2 reference pool, JD server, JD client, translator and CPU
++mining device against [ApertureCoin](https://github.com/IlumCI/Aperturecoin)
++(ticker SCIENCE). The Stratum V2 protocol is unchanged. Only the parts that
++depend on the chain differ:
++
++| Area | Upstream | This fork |
++|---|---|---|
++| Share and block proof of work | `SHA256d(header)` | ApertureMatMul v1: `BLAKE3(header \|\| BLAKE3(A·B))`, int8 n×n matrices from `BLAKE3-XOF("ApertureMatMul/v1" \|\| header)` |
++| Block identifier (`BlockFound`, prev hash) | `SHA256d(header)` | unchanged: `SHA256d(header)` |
++| Payout addresses in `addr()` and user identities | Bitcoin | ApertureCoin: `sci1`/`tsci1`/`rsci1` (bech32/bech32m), base58 versions 23/83 (main) and 111/196/58 (test, regtest) |
++| Template source | Bitcoin Core IPC or sv2-tp | ApertureCoin's sv2-tp (`contrib/sv2-tp` in the ApertureCoin repository) |
++
++The template's coinbase outputs are carried into every job unchanged. These
++are the 1.5% development-fund output, the witness commitment and, once
++ApertureMatMul v2 is active, the embedding results.
++
++## Layout
++
++- `aperture/aperture-pow/`: `aperture_pow` crate. It is a bit-exact port of
++  the node's `src/crypto/matmulpow.cpp`, and its tests use the node's test
++  vectors.
++- `aperture/stratum-patches/channels-sv2/`: `channels_sv2` from
++  stratum-mining/stratum at the commit pinned in `Cargo.lock`. Share
++  validation for standard and extended channels, server and client, uses
++  `channels_sv2::aperture::pow_block_hash`. The root `Cargo.toml` swaps it in
++  with `[patch."https://github.com/stratum-mining/stratum"]`, so no other
++  upstream crate is forked.
++- `stratum-apps/src/config_helpers/coinbase_output/aperture.rs`: ApertureCoin
++  address decoding.
++- `miner-apps/translator/src/lib/utils.rs`: SV1 share validation.
++- `integration-tests/lib/mining_device/mod.rs`: the CPU mining device hashes
++  ApertureMatMul. The SHA256d midstate fast path is disabled.
++- `aperture/config-examples/`: pool configurations.
++
++## Matrix dimension
++
++ApertureMatMul uses n = 512 on mainnet and testnet and n = 32 on regtest.
++Every role must use the node's value:
++
++- pool: `aperture_pow_dim` in the TOML config;
++- every role, the pool included when the key is absent: `APERTURE_POW_DIM=<n>`,
++  or `APERTURE_NETWORK=main|test|regtest`. With neither set, n defaults to 512.
++
++## Build and test
++
++```sh
++cargo build --release -p pool_sv2 -p jd_server_sv2 -p jd_client_sv2 -p translator_sv2 --bins
++cargo build --release -p integration_tests_sv2 --bin mining_device
++cargo test --release -p aperture_pow -p channels_sv2 -p stratum-apps --all-features
++```
++
++The end-to-end test lives in the ApertureCoin repository. It runs apertured
++(regtest, dev fund enforced), sv2-tp, this pool and this mining device. It
++checks that the pooled blocks are accepted and pay the pool through an
++`rsci1` address, and that they keep the dev-fund output. It also checks that
++every accepted share is the ApertureMatMul hash of the block header:
++
++```sh
++SV2TP=<sv2-tp> SRI_POOL=target/release/pool_sv2 \
++SRI_MINING_DEVICE=target/release/mining_device \
++    <aperturecoin>/test/functional/feature_sri_pool.py
++```
++
++## Not yet covered
++
++- ApertureMatMul v2 (proof of useful work) pooling. v2 shares are tickets
++  over the miner's own forward pass (`doc/pouw-v2.md` in the ApertureCoin
++  repository). Pooling them needs three things:
++  - a Rust ticket verifier;
++  - Mining-protocol extension messages that carry the ticket and its r×r panel;
++  - forwarding of the Template Distribution extension `0x4150`.
++
++  Until that exists, v2 blocks are mined solo against sv2-tp with
++  `aperture-sv2-miner`.
++- The translator has no SV1 ApertureMatMul miner to test against. Its share
++  check uses the same `pow_block_hash` as the pool.
+diff --git a/aperture/aperture-pow/Cargo.toml b/aperture/aperture-pow/Cargo.toml
+new file mode 100644
+index 00000000..c0cb30dd
+--- /dev/null
++++ b/aperture/aperture-pow/Cargo.toml
+@@ -0,0 +1,9 @@
++[package]
++name = "aperture_pow"
++version = "0.1.0"
++edition = "2021"
++description = "ApertureCoin proof of work (ApertureMatMul v1 and v2 tickets) for the SRI stack"
++license = "MIT OR Apache-2.0"
++
++[dependencies]
++blake3 = "1"
+diff --git a/aperture/aperture-pow/src/lib.rs b/aperture/aperture-pow/src/lib.rs
+new file mode 100644
+index 00000000..db3e1721
+--- /dev/null
++++ b/aperture/aperture-pow/src/lib.rs
+@@ -0,0 +1,150 @@
++//! ApertureCoin proof of work for the Stratum V2 reference implementation.
++//!
++//! ApertureMatMul v1 (ApertureCoin `doc/matmulpow.md`), a bit-exact port of
++//! `src/crypto/matmulpow.cpp`:
++//!
++//! ```text
++//! S      = BLAKE3-XOF("ApertureMatMul/v1" || header, 2*n*n)
++//! A, B   = S[0..n*n], S[n*n..2*n*n] as row-major int8 n x n matrices
++//! C      = A * B with exact int32 accumulation
++//! digest = BLAKE3(C as row-major int32 little-endian)
++//! pow    = BLAKE3(header || digest)          (compared as a little-endian uint256)
++//! ```
++//!
++//! The block *identifier* stays double-SHA256 of the header; only the
++//! proof-of-work comparison uses `pow`.
++
++use std::sync::atomic::{AtomicU32, Ordering};
++
++const TAG_V1: &[u8] = b"ApertureMatMul/v1";
++
++/// Matrix dimension of the active network: 512 on main/test, 32 on regtest.
++/// 0 means "not set yet": the first [`dim`] call reads `APERTURE_POW_DIM` or
++/// falls back to 512.
++static DIM: AtomicU32 = AtomicU32::new(0);
++
++/// Default dimension of a network by the node's `-chain` name.
++pub fn dim_for_network(network: &str) -> Option<u32> {
++    match network {
++        "main" | "mainnet" | "bitcoin" | "test" | "testnet" | "testnet4" | "signet" => Some(512),
++        "regtest" => Some(32),
++        _ => None,
++    }
++}
++
++/// Valid dimensions: multiples of 16 in 16..=4096 (same rule as the node).
++pub fn is_valid_dim(n: u32) -> bool {
++    (16..=4096).contains(&n) && n % 16 == 0
++}
++
++/// Set the network's matrix dimension (call once at startup from the config).
++pub fn set_dim(n: u32) {
++    assert!(is_valid_dim(n), "invalid ApertureMatMul dimension {n}");
++    DIM.store(n, Ordering::Relaxed);
++}
++
++/// Active dimension. Unless [`set_dim`] was called, it comes from the
++/// environment: `APERTURE_POW_DIM=<n>` or `APERTURE_NETWORK=<main|test|regtest>`,
++/// default 512 (main/test). Every SRI role (pool, JD client, translator, mining
++/// device) must use the node's value or every share is rejected.
++pub fn dim() -> u32 {
++    let d = DIM.load(Ordering::Relaxed);
++    if d != 0 {
++        return d;
++    }
++    let env = std::env::var("APERTURE_POW_DIM")
++        .ok()
++        .and_then(|v| v.parse::<u32>().ok())
++        .or_else(|| {
++            std::env::var("APERTURE_NETWORK")
++                .ok()
++                .and_then(|n| dim_for_network(&n))
++        })
++        .unwrap_or(512);
++    assert!(is_valid_dim(env), "invalid APERTURE_POW_DIM {env}");
++    let _ = DIM.compare_exchange(0, env, Ordering::Relaxed, Ordering::Relaxed);
++    DIM.load(Ordering::Relaxed)
++}
++
++/// ApertureMatMul v1 proof-of-work hash of an 80-byte header, raw bytes
++/// (interpret as little-endian uint256 against the target).
++pub fn matmul_v1(header: &[u8; 80], n: u32) -> [u8; 32] {
++    assert!(is_valid_dim(n));
++    let n = n as usize;
++    let nn = n * n;
++    let mut s = vec![0u8; 2 * nn];
++    let mut h = blake3::Hasher::new();
++    h.update(TAG_V1);
++    h.update(header);
++    h.finalize_xof().fill(&mut s);
++    let (a, b) = s.split_at(nn);
++    let mut c = vec![0i32; nn];
++    for i in 0..n {
++        let crow = &mut c[i * n..(i + 1) * n];
++        for k in 0..n {
++            let aik = a[i * n + k] as i8 as i32;
++            if aik == 0 {
++                continue;
++            }
++            let brow = &b[k * n..(k + 1) * n];
++            for (cj, &bkj) in crow.iter_mut().zip(brow) {
++                *cj += aik * (bkj as i8 as i32);
++            }
++        }
++    }
++    let mut hc = blake3::Hasher::new();
++    let mut buf = Vec::with_capacity(nn * 4);
++    for v in &c {
++        buf.extend_from_slice(&v.to_le_bytes());
++    }
++    hc.update(&buf);
++    let digest = hc.finalize();
++    let mut ho = blake3::Hasher::new();
++    ho.update(header);
++    ho.update(digest.as_bytes());
++    *ho.finalize().as_bytes()
++}
++
++/// v1 proof-of-work hash with the configured network dimension.
++pub fn pow_hash(header: &[u8; 80]) -> [u8; 32] {
++    matmul_v1(header, dim())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn hex(b: &[u8]) -> String {
++        b.iter().map(|x| format!("{x:02x}")).collect()
++    }
++
++    #[test]
++    fn node_test_vectors() {
++        // Shared with ApertureCoin src/test/matmulpow_tests.cpp.
++        let mut header = [0u8; 80];
++        for (i, b) in header.iter_mut().enumerate() {
++            *b = (i * 7 + 3) as u8;
++        }
++        assert_eq!(
++            hex(&matmul_v1(&header, 16)),
++            "d7ee1fb0146153fe17204659e4e8874d4e3574dae638e6a8084fec7efb0587a9"
++        );
++        assert_eq!(
++            hex(&matmul_v1(&header, 32)),
++            "e24c46295e05285325ea259f97f9506dcf3322d40f958636cbc7239cc03fff6a"
++        );
++        assert_eq!(
++            hex(&matmul_v1(&header, 64)),
++            "f75725f63275bd521e7f224592fdfd0b1cf14299b6d7fab6ce0ed6d3d93ec79e"
++        );
++        assert_eq!(
++            hex(&matmul_v1(&header, 512)),
++            "3347007498a9035dc1ba2174094efcbc3f80684deb9c1cb54dc9c933fc5f71ba"
++        );
++    }
++
++    #[test]
++    fn dims() {
++        assert!(is_valid_dim(32) && is_valid_dim(512) && !is_valid_dim(8) && !is_valid_dim(520));
++    }
++}
+diff --git a/aperture/config-examples/pool-aperture-mainnet.toml b/aperture/config-examples/pool-aperture-mainnet.toml
+new file mode 100644
+index 00000000..b8ddf931
+--- /dev/null
++++ b/aperture/config-examples/pool-aperture-mainnet.toml
+@@ -0,0 +1,25 @@
++# SRI pool for ApertureCoin (SCIENCE) mainnet, fed by sv2-tp next to apertured.
++# Start sv2-tp from the ApertureCoin repository (contrib/sv2-tp) and copy the
++# "authority key" it logs into [template_provider_type.Sv2Tp].public_key.
++authority_public_key = "<pool authority public key>"
++authority_secret_key = "<pool authority secret key>"
++cert_validity_sec = 3600
++listen_address = "0.0.0.0:34254"
++
++# ApertureCoin addresses are accepted in addr(): sci1... (bech32/bech32m),
++# A... (P2PKH), a... (P2SH). raw(<hex script>) and other descriptors also work.
++coinbase_reward_script = "addr(<sci1... pool payout address>)"
++
++server_id = 1
++pool_signature = "ApertureCoin SRI pool"
++shares_per_minute = 6.0
++share_batch_size = 10
++
++# ApertureMatMul matrix dimension: 512 on main and test, 32 on regtest. Must
++# match the node, or every share is rejected. Miners, translators and JD
++# clients take the same value from APERTURE_POW_DIM (or APERTURE_NETWORK).
++aperture_pow_dim = 512
++
++[template_provider_type.Sv2Tp]
++address = "127.0.0.1:8442"
++public_key = "<sv2-tp authority key>"
+diff --git a/aperture/config-examples/pool-aperture-regtest.toml b/aperture/config-examples/pool-aperture-regtest.toml
+new file mode 100644
+index 00000000..6a58db37
+--- /dev/null
++++ b/aperture/config-examples/pool-aperture-regtest.toml
+@@ -0,0 +1,25 @@
++# SRI pool for ApertureCoin (SCIENCE) regtest, fed by sv2-tp next to apertured.
++# Start sv2-tp from the ApertureCoin repository (contrib/sv2-tp) and copy the
++# "authority key" it logs into [template_provider_type.Sv2Tp].public_key.
++authority_public_key = "<pool authority public key>"
++authority_secret_key = "<pool authority secret key>"
++cert_validity_sec = 3600
++listen_address = "127.0.0.1:34254"
++
++# ApertureCoin addresses are accepted in addr(): sci1... / tsci1... / rsci1... (bech32/bech32m),
++# A... (P2PKH), a... (P2SH). raw(<hex script>) and other descriptors also work.
++coinbase_reward_script = "addr(<rsci1... pool payout address>)"
++
++server_id = 1
++pool_signature = "ApertureCoin SRI pool"
++shares_per_minute = 6.0
++share_batch_size = 10
++
++# ApertureMatMul matrix dimension: 512 on main and test, 32 on regtest. Must
++# match the node, or every share is rejected. Miners, translators and JD
++# clients take the same value from APERTURE_POW_DIM (or APERTURE_NETWORK).
++aperture_pow_dim = 32
++
++[template_provider_type.Sv2Tp]
++address = "127.0.0.1:18447"
++public_key = "<sv2-tp authority key>"
+diff --git a/integration-tests/lib/mining_device/mod.rs b/integration-tests/lib/mining_device/mod.rs
+index bef63af0..15674c93 100644
+--- a/integration-tests/lib/mining_device/mod.rs
++++ b/integration-tests/lib/mining_device/mod.rs
+@@ -654,7 +654,10 @@ impl Miner {
+         self.header = Some(header);
+         // Build a fast hasher with midstate prepared for the static parts of the header
+         if let Some(h) = &self.header {
+-            self.fast_hasher = Some(FastSha256d::from_header_static(h));
++            // ApertureCoin: the proof of work is ApertureMatMul, not SHA256d, so the
++            // SHA256d midstate hasher does not apply.
++            let _ = h;
++            self.fast_hasher = None;
+         } else {
+             self.fast_hasher = None;
+         }
+@@ -665,7 +668,9 @@ impl Miner {
+             let hash: [u8; 32] = if let Some(fast) = &mut self.fast_hasher {
+                 fast.hash_with_nonce_time(header.nonce, header.time)
+             } else {
+-                let hash_ = header.block_hash();
++                // ApertureCoin proof of work (ApertureMatMul v1).
++                let hash_ =
++                    stratum_apps::stratum_core::channels_sv2::aperture::pow_block_hash(header);
+                 *hash_.to_raw_hash().as_ref()
+             };
+ 
+@@ -911,9 +916,8 @@ fn measure_hashrate(duration_secs: u64, handicap: u32) -> f64 {
+         // hashes
+         miner.new_target_silent(vec![0_u8; 32]);
+         miner.header = Some(header_template);
+-        if let Some(h) = miner.header.as_ref() {
+-            miner.fast_hasher = Some(FastSha256d::from_header_static(h));
+-        }
++        // ApertureCoin: no SHA256d fast path (ApertureMatMul proof of work).
++        miner.fast_hasher = None;
+         handles.push(std::thread::spawn(move || {
+             // Synchronize start across threads
+             barrier.wait();
+diff --git a/miner-apps/translator/src/lib/utils.rs b/miner-apps/translator/src/lib/utils.rs
+index dcd648b2..c95a4e26 100644
+--- a/miner-apps/translator/src/lib/utils.rs
++++ b/miner-apps/translator/src/lib/utils.rs
+@@ -109,7 +109,8 @@ pub fn validate_sv1_share(
+     };
+ 
+     // convert the header hash to a target type for easy comparison
+-    let hash = header.block_hash();
++    // ApertureCoin: shares are compared on the ApertureMatMul proof-of-work hash.
++    let hash = stratum_apps::stratum_core::channels_sv2::aperture::pow_block_hash(&header);
+     let raw_hash: [u8; 32] = *hash.to_raw_hash().as_ref();
+     let hash_as_target = Target::from_le_bytes(raw_hash);
+ 
+diff --git a/pool-apps/pool/Cargo.toml b/pool-apps/pool/Cargo.toml
+index 0ded797e..1068c1a0 100644
+--- a/pool-apps/pool/Cargo.toml
++++ b/pool-apps/pool/Cargo.toml
+@@ -18,6 +18,7 @@ name = "pool_sv2"
+ path = "src/lib/mod.rs"
+ 
+ [dependencies]
++aperture_pow = { path = "../../aperture/aperture-pow" }
+ stratum-apps = { version = "0.8.0", path = "../../stratum-apps", features = ["pool"] }
+ async-channel = "1.5.1"
+ serde = { version = "1.0.89", features = ["derive", "alloc"], default-features = false }
+diff --git a/pool-apps/pool/src/lib/config.rs b/pool-apps/pool/src/lib/config.rs
+index 00076fc0..ecd65f36 100644
+--- a/pool-apps/pool/src/lib/config.rs
++++ b/pool-apps/pool/src/lib/config.rs
+@@ -60,6 +60,10 @@ pub struct PoolConfig {
+     /// `SetCustomMiningJob` retires the active job, so the rate is the client's, not this pool's.
+     #[serde(default)]
+     max_past_jobs: Option<usize>,
++    /// ApertureMatMul matrix dimension of the node's network (512 main/test, 32 regtest).
++    /// When absent, `APERTURE_POW_DIM` / `APERTURE_NETWORK` or 512 applies.
++    #[serde(default)]
++    aperture_pow_dim: Option<u32>,
+ }
+ 
+ impl PoolConfig {
+@@ -94,6 +98,7 @@ impl PoolConfig {
+             shares_per_minute,
+             share_batch_size,
+             max_past_jobs: None,
++            aperture_pow_dim: None,
+             log_file: None,
+             server_id,
+             supported_extensions,
+@@ -151,6 +156,11 @@ impl PoolConfig {
+ 
+     /// Returns the shares per minute.
+     /// Past jobs retained per channel, or `None` to use the `channels_sv2` default.
++    /// Configured ApertureMatMul dimension, if any.
++    pub fn aperture_pow_dim(&self) -> Option<u32> {
++        self.aperture_pow_dim
++    }
++
+     pub fn max_past_jobs(&self) -> Option<usize> {
+         self.max_past_jobs
+     }
+diff --git a/pool-apps/pool/src/lib/mod.rs b/pool-apps/pool/src/lib/mod.rs
+index 0eb06bbd..24676666 100644
+--- a/pool-apps/pool/src/lib/mod.rs
++++ b/pool-apps/pool/src/lib/mod.rs
+@@ -54,6 +54,23 @@ impl PoolSv2 {
+     /// If any error occurs during bootstrapping, `start` receives the partially initialized
+     /// runtime, gracefully shuts it down, and then returns the error.
+     pub async fn start(&self) -> Result<(), PoolErrorKind> {
++        {
++            use stratum_apps::stratum_core::channels_sv2::aperture;
++            if let Some(n) = self.config.aperture_pow_dim() {
++                if !aperture_pow::is_valid_dim(n) {
++                    tracing::error!("invalid aperture_pow_dim {n}");
++                    self.mark_stopped();
++                    return Err(PoolErrorKind::Custom(format!(
++                        "invalid aperture_pow_dim {n}"
++                    )));
++                }
++                aperture::set_pow_dim(n);
++            }
++            tracing::info!(
++                "ApertureMatMul proof of work, dimension {}",
++                aperture_pow::dim()
++            );
++        }
+         let runtime = match PoolRuntime::<Init>::new(self.clone()) {
+             Ok(runtime) => runtime,
+             Err(err) => {
+diff --git a/stratum-apps/src/config_helpers/coinbase_output/aperture.rs b/stratum-apps/src/config_helpers/coinbase_output/aperture.rs
+new file mode 100644
+index 00000000..42000710
+--- /dev/null
++++ b/stratum-apps/src/config_helpers/coinbase_output/aperture.rs
+@@ -0,0 +1,105 @@
++//! ApertureCoin address decoding for `addr()` descriptors and payout identities.
++//!
++//! ApertureCoin (ticker SCIENCE) keeps Bitcoin's script templates but uses its own
++//! address encodings (ApertureCoin `src/chainparams.cpp`):
++//!
++//! | network | bech32/bech32m HRP | base58 P2PKH | base58 P2SH |
++//! |---------|--------------------|--------------|-------------|
++//! | main    | `sci`              | 23 (`A`)     | 83 (`a`)    |
++//! | test    | `tsci`             | 111          | 196, 58     |
++//! | regtest | `rsci`             | 111          | 196, 58     |
++
++use miniscript::bitcoin::{
++    PubkeyHash, ScriptBuf, ScriptHash, WitnessProgram, WitnessVersion, base58,
++    bech32::{self, Hrp},
++    hashes::Hash,
++};
++
++/// Decoded ApertureCoin address: its script and whether it is a mainnet address.
++pub(super) fn decode(address: &str) -> Option<(ScriptBuf, bool)> {
++    if let Ok((hrp, version, program)) = bech32::segwit::decode(address) {
++        let mainnet = if hrp == Hrp::parse_unchecked("sci") {
++            true
++        } else if hrp == Hrp::parse_unchecked("tsci") || hrp == Hrp::parse_unchecked("rsci") {
++            false
++        } else {
++            return None;
++        };
++        let version = WitnessVersion::try_from(version).ok()?;
++        let wp = WitnessProgram::new(version, &program).ok()?;
++        return Some((ScriptBuf::new_witness_program(&wp), mainnet));
++    }
++    let data = base58::decode_check(address).ok()?;
++    if data.len() != 21 {
++        return None;
++    }
++    let hash: [u8; 20] = data[1..].try_into().ok()?;
++    match data[0] {
++        23 => Some((
++            ScriptBuf::new_p2pkh(&PubkeyHash::from_byte_array(hash)),
++            true,
++        )),
++        83 => Some((
++            ScriptBuf::new_p2sh(&ScriptHash::from_byte_array(hash)),
++            true,
++        )),
++        111 => Some((
++            ScriptBuf::new_p2pkh(&PubkeyHash::from_byte_array(hash)),
++            false,
++        )),
++        196 | 58 => Some((
++            ScriptBuf::new_p2sh(&ScriptHash::from_byte_array(hash)),
++            false,
++        )),
++        _ => None,
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use miniscript::bitcoin::bech32::{Fe32, segwit};
++
++    #[test]
++    fn bech32_networks() {
++        let prog = [7u8; 20];
++        for (hrp, mainnet) in [("sci", true), ("tsci", false), ("rsci", false)] {
++            let a = segwit::encode(Hrp::parse(hrp).unwrap(), Fe32::Q, &prog).unwrap();
++            let (script, m) = decode(&a).unwrap();
++            assert_eq!(m, mainnet);
++            assert_eq!(script.as_bytes()[..2], [0x00, 0x14]);
++            assert_eq!(&script.as_bytes()[2..], &prog);
++        }
++        let tr = segwit::encode(Hrp::parse("rsci").unwrap(), Fe32::P, &[9u8; 32]).unwrap();
++        assert_eq!(decode(&tr).unwrap().0.as_bytes()[..2], [0x51, 0x20]);
++        let btc = segwit::encode(Hrp::parse("bc").unwrap(), Fe32::Q, &prog).unwrap();
++        assert!(decode(&btc).is_none());
++    }
++
++    #[test]
++    fn base58_prefixes() {
++        let mut d = vec![23u8];
++        d.extend([1u8; 20]);
++        let a = base58::encode_check(&d);
++        assert!(a.starts_with('A'));
++        let (s, m) = decode(&a).unwrap();
++        assert!(m && s.is_p2pkh());
++        d[0] = 83;
++        let (s, m) = decode(&base58::encode_check(&d)).unwrap();
++        assert!(m && s.is_p2sh());
++        d[0] = 0; // Bitcoin mainnet P2PKH is not an ApertureCoin address
++        assert!(decode(&base58::encode_check(&d)).is_none());
++    }
++}
++
++#[cfg(test)]
++mod descriptor_tests {
++    #[test]
++    fn addr_descriptor() {
++        let r = super::super::CoinbaseRewardScript::from_descriptor(
++            "addr(rsci1qcgf339mlm56vug5vhumv80xynrkz2reknurua5)",
++        );
++        println!("{r:?}");
++        assert!(r.is_ok());
++    }
++}
+diff --git a/stratum-apps/src/config_helpers/coinbase_output/mod.rs b/stratum-apps/src/config_helpers/coinbase_output/mod.rs
+index f876f5ff..2b868e1e 100644
+--- a/stratum-apps/src/config_helpers/coinbase_output/mod.rs
++++ b/stratum-apps/src/config_helpers/coinbase_output/mod.rs
+@@ -1,3 +1,4 @@
++mod aperture;
+ mod errors;
+ mod serde_types;
+ 
+@@ -38,6 +39,15 @@ impl CoinbaseRewardScript {
+         let root = tree.root();
+         match root.name() {
+             "addr" => {
++                let addr_str: String = root
++                    .verify_terminal_parent("addr", "a valid address")
++                    .map_err(miniscript::Error::Parse)?;
++                if let Some((script_pubkey, ok_for_mainnet)) = aperture::decode(&addr_str) {
++                    return Ok(Self {
++                        script_pubkey,
++                        ok_for_mainnet,
++                    });
++                }
+                 let addr: Address<NetworkUnchecked> = root
+                     .verify_terminal_parent("addr", "a valid Bitcoin address")
+                     .map_err(miniscript::Error::Parse)?;

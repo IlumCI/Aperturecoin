@@ -28,8 +28,8 @@ Components
 | Reference CPU miner (solo, Template Distribution Protocol) | Done | `contrib/sv2-tp/overlay/src/aperture-sv2-miner.cpp` |
 | ApertureMatMul v2 over SV2 (useful-work extension) | Done: TP, miner, end-to-end test | `patches/0002-*`, `feature_sv2_pouw.py` |
 | End-to-end test | Done. Skipped unless `SV2TP`/`SV2MINER` are set | `test/functional/feature_sv2.py` |
-| Pool, Job Declarator and Translator proxy (SRI `sv2-apps`) | Not started | Planned fork |
-| GPU miner | Not started | Planned |
+| Pool, Job Declarator and Translator proxy (SRI `sv2-apps`) | Done for ApertureMatMul v1. v2 pooling not started | `contrib/sri-pool`, `feature_sri_pool.py` |
+| GPU miner | Done: CUDA/HIP kernels for v2. Not yet run on a GPU | `contrib/gpu-miner` |
 
 ApertureMatMul v2: the useful-work extension
 --------------------------------------------
@@ -80,23 +80,61 @@ to its downstream miners, and must validate shares as v2 tickets, which needs
 the protocol-model weights. The work described under "Porting the SRI pool"
 applies unchanged, plus this extension.
 
-Porting the SRI pool
---------------------
+SRI pool fork
+-------------
 
-The SV2 wire messages carry only header fields (version, prev_hash, merkle
-root, ntime, nbits, nonce), so they do not depend on the hash function. An SRI
-fork needs to change three things:
+`contrib/sri-pool` holds the ApertureCoin fork of the SRI applications
+(`stratum-mining/sv2-apps`: pool, JD server, JD client, translator, CPU mining
+device). It is a patch series against pinned upstream commits
+(`UPSTREAM_COMMITS`). `build.sh` fetches those commits, applies the patches
+and builds the binaries. The Stratum V2 wire protocol is unchanged, because
+its messages carry only header fields. The fork changes four things:
 
-1. **Share and block validation.** Replace the header hash (rust-bitcoin
-   `BlockHash`/SHA256d) with ApertureMatMul. Use a small Rust crate built on
-   the `blake3` crate and an exact int8 matrix multiply, and validate it
-   against the vectors in `src/test/matmulpow_tests.cpp`. Keep the block
-   *identifier* as SHA256d.
-2. **Difficulty and target math.** Replace it with the ApertureCoin
-   `powLimit` for each network.
-3. **Required coinbase outputs.** The pool must include every
-   `coinbase_tx_outputs` entry from `NewTemplate`. This includes non-zero
-   outputs such as the development fund, not only `OP_RETURN` outputs.
+1. **Share and block validation.** ApertureMatMul v1 replaces SHA256d in
+   `channels_sv2` (standard and extended channels, server and client), in the
+   translator's SV1 share check and in the CPU mining device. It comes from
+   the `aperture_pow` crate, a bit-exact port of `src/crypto/matmulpow.cpp`
+   that is tested against `src/test/matmulpow_tests.cpp`'s vectors. The
+   block *identifier* reported in `BlockFound` stays SHA256d. `channels_sv2`
+   is patched through Cargo's `[patch]` table, so the other upstream protocol
+   crates are used unmodified.
+2. **Matrix dimension.** The pool has the config key `aperture_pow_dim`
+   (512 main/test, 32 regtest). Every role also reads `APERTURE_POW_DIM` or
+   `APERTURE_NETWORK`.
+3. **Addresses.** `addr()` descriptors and payout identities
+   (`sri/solo/<address>/...`, `sri/donate/<pct>/<address>/...`) accept
+   ApertureCoin addresses: `sci1`/`tsci1`/`rsci1` and base58 versions
+   23/83/111/196/58.
+4. **Required coinbase outputs.** No change is needed. The pool appends
+   every template output to the coinbase, including the development fund.
+
+Difficulty needs no chain-specific code. Share targets come from the
+channel's nominal hashrate, and the block target comes from the template's
+`nBits`.
+
+`test/functional/feature_sri_pool.py` runs apertured (regtest, dev fund
+enforced), sv2-tp, the SRI pool and the SRI mining device. It checks three
+things:
+
+- the pooled blocks are accepted, pay the pool's `rsci1` address and keep the
+  dev-fund output;
+- every accepted share is the ApertureMatMul hash of its block header,
+  compared against the Python reference;
+- that hash meets a 16-bit share target, which SHA256d of the header does not
+  meet.
+
+```sh
+contrib/sri-pool/build.sh
+SV2TP=contrib/sv2-tp/work/build/bin/sv2-tp \
+SRI_POOL=contrib/sri-pool/work/sv2-apps/target/release/pool_sv2 \
+SRI_MINING_DEVICE=contrib/sri-pool/work/sv2-apps/target/release/mining_device \
+    test/functional/feature_sri_pool.py
+```
+
+Not yet covered is pooling ApertureMatMul v2 (useful work). It needs a Rust
+ticket verifier and Mining-protocol extension messages for the ticket and its
+r×r panel. It also needs the pool to forward the Template Distribution
+extension `0x4150`. Until then, v2 is mined solo with `aperture-sv2-miner`.
 
 Operating notes
 ---------------
