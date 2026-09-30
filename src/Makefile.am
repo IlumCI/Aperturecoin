@@ -203,6 +203,8 @@ BITCOIN_CORE_H = \
   memusage.h \
   merkleblock.h \
   miner.h \
+  model/apm.h \
+  model/intmodel.h \
   mweb/mweb_db.h \
   mweb/mweb_miner.h \
   mweb/mweb_models.h \
@@ -473,6 +475,8 @@ crypto_libbitcoin_crypto_base_a_SOURCES = \
   crypto/hmac_sha512.h \
   crypto/matmulpow.cpp \
   crypto/matmulpow.h \
+  crypto/matmulpow_v2.cpp \
+  crypto/matmulpow_v2.h \
   crypto/poly1305.h \
   crypto/poly1305.cpp \
   crypto/ripemd160.cpp \
@@ -554,6 +558,8 @@ libbitcoin_consensus_a_SOURCES = \
 libbitcoin_common_a_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES)
 libbitcoin_common_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 libbitcoin_common_a_SOURCES = \
+  model/apm.cpp \
+  model/intmodel.cpp \
   base58.cpp \
   bech32.cpp \
   bloom.cpp \
