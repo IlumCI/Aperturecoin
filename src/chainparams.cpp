@@ -309,6 +309,9 @@ public:
         consensus.fPowNoRetargeting = true;
         consensus.nASERTHalfLife = 2 * 24 * 60 * 60;
         consensus.nMatMulDim = 32;
+        // ApertureMatMul v2 is off by default on regtest; see -powv2height.
+        consensus.nPowV2Rank = 8;
+        consensus.powV2ModelId = "f4cb7bf674eedb6bec59de9f06510ecd42599ab4a903366c4c22b56e6c2bc31d"; // tiny_model(seed=1)
         consensus.nRuleChangeActivationThreshold = 108; // 75% for testchains
         consensus.nMinerConfirmationWindow = 144; // Faster than normal for regtest (144 instead of 2016)
 
@@ -414,6 +417,14 @@ void CRegTestParams::UpdateActivationParametersFromArgs(const ArgsManager& args)
             throw std::runtime_error(strprintf("Development fund end height %ld is out of valid range.", height));
         }
         consensus.nDevFundEndHeight = static_cast<int>(height);
+    }
+
+    if (args.IsArgSet("-powv2height")) {
+        const int64_t height = args.GetArg("-powv2height", consensus.nPowV2Height);
+        if (height < 1 || height >= std::numeric_limits<int>::max()) {
+            throw std::runtime_error(strprintf("ApertureMatMul v2 activation height %ld is out of valid range.", height));
+        }
+        consensus.nPowV2Height = static_cast<int>(height);
     }
 
     if (!args.IsArgSet("-vbparams")) return;

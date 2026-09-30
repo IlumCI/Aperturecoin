@@ -707,7 +707,8 @@ class CTransaction:
 
 class CBlockHeader:
     __slots__ = ("hash", "hashMerkleRoot", "hashPrevBlock", "nBits", "nNonce",
-                 "nTime", "nVersion", "sha256", "powhash256")
+                 "nTime", "nVersion", "sha256", "powhash256", "powv2")
+    VERSION_POWV2 = 1 << 8
 
     def __init__(self, header=None):
         if header is None:
@@ -719,6 +720,7 @@ class CBlockHeader:
             self.nTime = header.nTime
             self.nBits = header.nBits
             self.nNonce = header.nNonce
+            self.powv2 = header.powv2
             self.sha256 = header.sha256
             self.hash = header.hash
             self.powhash256 = header.powhash256
@@ -731,6 +733,7 @@ class CBlockHeader:
         self.nTime = 0
         self.nBits = 0
         self.nNonce = 0
+        self.powv2 = b""
         self.sha256 = None
         self.hash = None
         self.powhash256 = None
@@ -742,6 +745,12 @@ class CBlockHeader:
         self.nTime = struct.unpack("<I", f.read(4))[0]
         self.nBits = struct.unpack("<I", f.read(4))[0]
         self.nNonce = struct.unpack("<I", f.read(4))[0]
+        self.powv2 = b""
+        if self.nVersion & self.VERSION_POWV2:
+            # ApertureMatMul v2 extension kept as raw bytes: batch_root, op, i, j, s, panel
+            fixed = f.read(40)
+            n = deser_compact_size(f)
+            self.powv2 = fixed + ser_compact_size(n) + f.read(n)
         self.sha256 = None
         self.hash = None
         self.powhash256 = None
@@ -754,6 +763,8 @@ class CBlockHeader:
         r += struct.pack("<I", self.nTime)
         r += struct.pack("<I", self.nBits)
         r += struct.pack("<I", self.nNonce)
+        if self.nVersion & self.VERSION_POWV2:
+            r += self.powv2
         return r
 
     def calc_sha256(self):
@@ -765,9 +776,11 @@ class CBlockHeader:
             r += struct.pack("<I", self.nTime)
             r += struct.pack("<I", self.nBits)
             r += struct.pack("<I", self.nNonce)
+            self.powhash256 = uint256_from_str(getPoWHash(r)) if not self.nVersion & self.VERSION_POWV2 else None
+            if self.nVersion & self.VERSION_POWV2:
+                r += self.powv2
             self.sha256 = uint256_from_str(hash256(r))
             self.hash = encode(hash256(r)[::-1], 'hex_codec').decode('ascii')
-            self.powhash256 = uint256_from_str(getPoWHash(r))
 
     def rehash(self):
         self.sha256 = None

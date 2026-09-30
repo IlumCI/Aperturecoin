@@ -5,6 +5,10 @@
 
 #include <miner.h>
 
+#include <crypto/matmulpow_v2.h>
+
+#include <model/embed.h>
+
 #include <amount.h>
 #include <chain.h>
 #include <chainparams.h>
@@ -56,6 +60,98 @@ void RegenerateCommitments(CBlock& block)
     block.hashMerkleRoot = BlockMerkleRoot(block);
 }
 
+bool FillPowV2Body(CBlock& block, std::vector<intmodel::OpTrace>& trace, std::string& error)
+{
+    const intmodel::IntModel* model = embed::GetProtocolModel();
+    if (!model) {
+        error = "no protocol model loaded";
+        return false;
+    }
+    CMutableTransaction cb{*block.vtx.at(0)};
+    embed::Result tmp;
+    cb.vout.erase(std::remove_if(cb.vout.begin(), cb.vout.end(), [&](const CTxOut& o) { return embed::ParseResult(o.scriptPubKey, tmp); }), cb.vout.end());
+
+    const std::vector<embed::Request> requests = embed::CollectRequests(block);
+    trace.clear();
+    auto merge = [&](std::vector<intmodel::OpTrace>& part) {
+        if (trace.empty()) {
+            trace = std::move(part);
+            return;
+        }
+        for (size_t k = 0; k < trace.size(); ++k) {
+            trace[k].q.insert(trace[k].q.end(), part[k].q.begin(), part[k].q.end());
+            trace[k].rows += part[k].rows;
+        }
+    };
+    for (const embed::Request& r : requests) {
+        const std::vector<uint32_t> input = embed::ModelInput(*model, r.ids);
+        if (input.empty()) {
+            error = "unservable request " + r.outpoint.ToString();
+            return false;
+        }
+        std::vector<intmodel::OpTrace> part;
+        embed::Result res;
+        res.outpoint = r.outpoint;
+        res.embedding = embed::Embed(*model, input, &part);
+        cb.vout.emplace_back(0, embed::MakeResultScript(res));
+        merge(part);
+    }
+    if (requests.empty()) {
+        // No paid work: the miner still runs the real model (EOS-only input).
+        std::vector<intmodel::OpTrace> part;
+        embed::Embed(*model, embed::ModelInput(*model, {}), &part);
+        merge(part);
+    }
+    block.vtx[0] = MakeTransactionRef(std::move(cb));
+    block.powv2.batch_root = embed::BatchRoot(requests);
+    return true;
+}
+
+bool SolvePowV2(CBlock& block, const std::vector<intmodel::OpTrace>& trace, const Consensus::Params& params, uint64_t& max_tries)
+{
+    const unsigned int r = matmulpow_v2::GetRank();
+    const std::vector<matmulpow_v2::Op>& ops = matmulpow_v2::GetOps();
+    if (r == 0 || ops.empty()) return false;
+    unsigned char seed_input[112], sigma[32];
+    block.SerializeSeedInput(seed_input);
+    matmulpow_v2::Seed(seed_input, sizeof(seed_input), sigma);
+    std::vector<int8_t> panel(r * matmulpow_v2::GROUP);
+    for (const intmodel::OpTrace& tr : trace) {
+        const matmulpow_v2::Op& od = ops.at(tr.op);
+        const unsigned int tiles_i = (tr.rows + r - 1) / r, tiles_j = od.d_out / r, spans = od.d_in / matmulpow_v2::GROUP;
+        for (unsigned int i = 0; i < tiles_i; ++i) {
+            for (unsigned int s = 0; s < spans; ++s) {
+                for (unsigned int x = 0; x < r; ++x) {
+                    const unsigned int row = i * r + x;
+                    for (unsigned int k = 0; k < matmulpow_v2::GROUP; ++k) {
+                        panel[x * matmulpow_v2::GROUP + k] = row < tr.rows ? tr.q[static_cast<size_t>(row) * od.d_in + s * matmulpow_v2::GROUP + k] : 0;
+                    }
+                }
+                for (unsigned int j = 0; j < tiles_j; ++j) {
+                    if (max_tries == 0) return false;
+                    --max_tries;
+                    matmulpow_v2::Ticket t;
+                    t.op = tr.op;
+                    t.i = static_cast<uint16_t>(i);
+                    t.j = static_cast<uint16_t>(j);
+                    t.s = static_cast<uint16_t>(s);
+                    uint256 pow;
+                    if (!matmulpow_v2::TicketPoW(sigma, r, od, t, panel.data(), pow.begin())) continue;
+                    if (CheckProofOfWork(pow, block.nBits, params)) {
+                        block.powv2.op = t.op;
+                        block.powv2.tile_i = t.i;
+                        block.powv2.tile_j = t.j;
+                        block.powv2.span_s = t.s;
+                        block.powv2.panel = panel;
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
 BlockAssembler::Options::Options() {
     blockMinFeeRate = CFeeRate(DEFAULT_BLOCK_MIN_TX_FEE);
     nBlockMaxWeight = DEFAULT_BLOCK_MAX_WEIGHT;
@@ -97,6 +193,8 @@ void BlockAssembler::resetBlock()
     nBlockSigOpsCost = 400;
     nBlockMWEBWeight = 0;
     nBlockMWEBInputs = 0;
+    nBlockRequests = 0;
+    fPowV2 = false;
     fIncludeWitness = false;
     fIncludeMWEB = false;
 
@@ -160,6 +258,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
         mweb_miner.NewBlock(nHeight);
     }
 
+    fPowV2 = nHeight >= chainparams.GetConsensus().nPowV2Height;
+
     int nPackagesSelected = 0;
     int nDescendantsUpdated = 0;
     addPackageTxs(nPackagesSelected, nDescendantsUpdated);
@@ -189,6 +289,12 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     }
     coinbaseTx.vin[0].scriptSig = CScript() << nHeight << OP_0;
     pblock->vtx[0] = MakeTransactionRef(std::move(coinbaseTx));
+    if (fPowV2) {
+        std::string error;
+        if (!FillPowV2Body(*pblock, pblocktemplate->powv2_trace, error)) {
+            throw std::runtime_error(strprintf("%s: ApertureMatMul v2 body: %s", __func__, error));
+        }
+    }
     pblocktemplate->vchCoinbaseCommitment = GenerateCoinbaseCommitment(*pblock, pindexPrev, chainparams.GetConsensus());
     pblocktemplate->vTxFees[0] = -nFees;
 
@@ -261,6 +367,13 @@ bool BlockAssembler::TestPackageTransactions(const CTxMemPool::setEntries& packa
             return false;
         }
     }
+    if (fPowV2) {
+        unsigned int requests = 0;
+        for (CTxMemPool::txiter it : package) {
+            for (const CTxOut& out : it->GetTx().vout) requests += embed::IsRequestScript(out.scriptPubKey);
+        }
+        if (nBlockRequests + requests > chainparams.GetConsensus().nMaxEmbedRequests) return false;
+    }
     return true;
 }
 
@@ -294,6 +407,17 @@ bool BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
             pTx = MakeTransactionRef(std::move(mutable_tx));
         }
 
+        if (fPowV2) {
+            // Each request adds a coinbase result (embedding + framing).
+            const intmodel::IntModel* model = embed::GetProtocolModel();
+            const uint64_t result_weight = WITNESS_SCALE_FACTOR * ((model ? model->Config().hidden_size : 0) + 80);
+            for (const CTxOut& out : pTx->vout) {
+                if (embed::IsRequestScript(out.scriptPubKey)) {
+                    ++nBlockRequests;
+                    nBlockWeight += result_weight;
+                }
+            }
+        }
         pblocktemplate->block.vtx.emplace_back(pTx);
         pblocktemplate->vTxFees.push_back(iter->GetFee() - hogex_fee);
         pblocktemplate->vTxSigOpsCost.push_back(iter->GetSigOpCost() - hogex_sigops);

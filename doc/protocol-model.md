@@ -1,8 +1,10 @@
 Protocol model and the Aperture integer inference profile
 ==========================================================
 
-Status: reference implementation in Python (`contrib/aperture-model`). The C++
-node port and consensus integration follow `doc/pouw-v2.md`.
+Status: the reference implementation is in Python (`contrib/aperture-model`)
+and the node implementation in C++ (`src/model`). The two agree bit for bit
+on the golden vectors. Consensus integration is described in
+`doc/pouw-v2.md`.
 
 Mining runs the network's **protocol model** (`doc/pouw-v2.md`). Every node,
 miner and GPU kernel must compute that model **bit for bit** identically,

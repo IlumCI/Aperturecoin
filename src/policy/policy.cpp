@@ -7,6 +7,8 @@
 
 #include <policy/policy.h>
 
+#include <model/embed.h>
+
 #include <primitives/token.h>
 
 #include <consensus/validation.h>
@@ -69,6 +71,9 @@ bool IsStandard(const CScript& scriptPubKey, TxoutType& whichType)
             return false;
         if (m < 1 || m > n)
             return false;
+    } else if (whichType == TxoutType::NULL_DATA && embed::IsRequestScript(scriptPubKey)) {
+        // Embedding requests (doc/pouw-v2.md) carry token ids, not arbitrary data.
+        return scriptPubKey.size() <= MAX_STANDARD_EMBED_REQUEST_SIZE;
     } else if (whichType == TxoutType::NULL_DATA &&
                (!fAcceptDatacarrier || scriptPubKey.size() > nMaxDatacarrierBytes)) {
           return false;
@@ -120,6 +125,7 @@ bool IsStandardTx(const CTransaction& tx, bool permit_bare_multisig, const CFeeR
     }
 
     unsigned int nDataOut = 0;
+    unsigned int nRequestOut = 0;
     TxoutType whichType;
     for (const CTxOut& txout : txouts) {
         if (!::IsStandard(txout.scriptPubKey, whichType)) {
@@ -127,7 +133,9 @@ bool IsStandardTx(const CTransaction& tx, bool permit_bare_multisig, const CFeeR
             return false;
         }
 
-        if (whichType == TxoutType::NULL_DATA)
+        if (whichType == TxoutType::NULL_DATA && embed::IsRequestScript(txout.scriptPubKey))
+            nRequestOut++;
+        else if (whichType == TxoutType::NULL_DATA)
             nDataOut++;
         else if ((whichType == TxoutType::MULTISIG) && (!permit_bare_multisig)) {
             reason = "bare-multisig";
@@ -136,6 +144,11 @@ bool IsStandardTx(const CTransaction& tx, bool permit_bare_multisig, const CFeeR
             reason = "dust";
             return false;
         }
+    }
+
+    if (nRequestOut > 1) {
+        reason = "multi-embed-request";
+        return false;
     }
 
     // only one OP_RETURN txout is permitted

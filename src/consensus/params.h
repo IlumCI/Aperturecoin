@@ -8,6 +8,7 @@
 
 #include <uint256.h>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace Consensus {
@@ -94,6 +95,16 @@ struct Params {
     int64_t nASERTHalfLife;
     /** ApertureMatMul proof-of-work matrix dimension (see doc/matmulpow.md) */
     unsigned int nMatMulDim;
+    /**
+     * ApertureMatMul v2 (doc/pouw-v2.md): from this height every header carries
+     * the useful-work ticket and every block serves its embedding requests
+     * with the protocol model identified by powV2ModelId. INT_MAX = disabled.
+     */
+    int nPowV2Height{std::numeric_limits<int>::max()};
+    unsigned int nPowV2Rank{32};
+    std::string powV2ModelId;
+    /** Maximum embedding requests served per block. */
+    unsigned int nMaxEmbedRequests{32};
     /**
      * Development fund: every coinbase below nDevFundEndHeight must pay at
      * least nDevFundBasisPoints / 10000 of the block subsidy (fees excluded) to

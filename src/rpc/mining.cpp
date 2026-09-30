@@ -105,7 +105,7 @@ static RPCHelpMan getnetworkhashps()
     };
 }
 
-static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& max_tries, unsigned int& extra_nonce, uint256& block_hash)
+static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& max_tries, unsigned int& extra_nonce, uint256& block_hash, const std::vector<intmodel::OpTrace>* powv2_trace = nullptr)
 {
     block_hash.SetNull();
 
@@ -116,7 +116,17 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& 
 
     CChainParams chainparams(Params());
 
-    while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !CheckProofOfWork(block.GetPoWHash(), block.nBits, chainparams.GetConsensus()) && !ShutdownRequested()) {
+    if (block.IsPowV2()) {
+        // ApertureMatMul v2: every weight-matmul tile of the block's forward
+        // pass is a ticket; a new nonce gives new noise (doc/pouw-v2.md).
+        if (!powv2_trace) throw JSONRPCError(RPC_INTERNAL_ERROR, "missing ApertureMatMul v2 trace");
+        while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !ShutdownRequested()) {
+            if (SolvePowV2(block, *powv2_trace, chainparams.GetConsensus(), max_tries)) break;
+            ++block.nNonce;
+        }
+        if (max_tries == 0 && !CheckProofOfWork(block.GetPoWHash(), block.nBits, chainparams.GetConsensus())) return false;
+    }
+    while (!block.IsPowV2() && max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !CheckProofOfWork(block.GetPoWHash(), block.nBits, chainparams.GetConsensus()) && !ShutdownRequested()) {
         ++block.nNonce;
         --max_tries;
     }
@@ -156,7 +166,7 @@ static UniValue generateBlocks(ChainstateManager& chainman, const CTxMemPool& me
         CBlock *pblock = &pblocktemplate->block;
 
         uint256 block_hash;
-        if (!GenerateBlock(chainman, *pblock, nMaxTries, nExtraNonce, block_hash)) {
+        if (!GenerateBlock(chainman, *pblock, nMaxTries, nExtraNonce, block_hash, &pblocktemplate->powv2_trace)) {
             break;
         }
 
@@ -378,6 +388,11 @@ static RPCHelpMan generateblock()
 
     // Add transactions
     block.vtx.insert(block.vtx.end(), txs.begin(), txs.end());
+    std::vector<intmodel::OpTrace> powv2_trace;
+    if (block.IsPowV2()) {
+        std::string error;
+        if (!FillPowV2Body(block, powv2_trace, error)) throw JSONRPCError(RPC_VERIFY_ERROR, error);
+    }
     RegenerateCommitments(block);
 
     {
@@ -393,7 +408,7 @@ static RPCHelpMan generateblock()
     uint64_t max_tries{DEFAULT_MAX_TRIES};
     unsigned int extra_nonce{0};
 
-    if (!GenerateBlock(EnsureChainman(request.context), block, max_tries, extra_nonce, block_hash) || block_hash.IsNull()) {
+    if (!GenerateBlock(EnsureChainman(request.context), block, max_tries, extra_nonce, block_hash, &powv2_trace) || block_hash.IsNull()) {
         throw JSONRPCError(RPC_MISC_ERROR, "Failed to make block.");
     }
 
@@ -765,6 +780,9 @@ static RPCHelpMan getblocktemplate()
     CHECK_NONFATAL(pindexPrev);
     CBlock* pblock = &pblocktemplate->block; // pointer for convenience
     const Consensus::Params& consensusParams = Params().GetConsensus();
+    if (pblock->IsPowV2()) {
+        throw JSONRPCError(RPC_MISC_ERROR, "ApertureMatMul v2 templates need the block's forward-pass trace; use the in-node miner (external v2 mining over Stratum V2 is not implemented yet)");
+    }
 
     // Update nTime
     UpdateTime(pblock, consensusParams, pindexPrev);

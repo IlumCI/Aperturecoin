@@ -18,9 +18,33 @@
  * in the block is a special one that creates a new coin owned by the creator
  * of the block.
  */
+/**
+ * ApertureMatMul v2 header extension (doc/pouw-v2.md). Present, and covered by
+ * the block hash, only when nVersion has VERSION_POWV2 set.
+ */
+struct PowV2Proof {
+    uint256 batch_root;          //!< commitment to the block's embedding requests
+    uint16_t op{0};              //!< weight matmul index in the protocol model
+    uint16_t tile_i{0};          //!< activation row tile
+    uint16_t tile_j{0};          //!< output column tile
+    uint16_t span_s{0};          //!< K-span (activation scale group)
+    std::vector<int8_t> panel;   //!< r x 256 int8 activation panel of the ticket
+
+    SERIALIZE_METHODS(PowV2Proof, obj) { READWRITE(obj.batch_root, obj.op, obj.tile_i, obj.tile_j, obj.span_s, obj.panel); }
+
+    void SetNull()
+    {
+        batch_root.SetNull();
+        op = tile_i = tile_j = span_s = 0;
+        panel.clear();
+    }
+};
+
 class CBlockHeader
 {
 public:
+    static constexpr int32_t VERSION_POWV2 = 1 << 8;
+
     // header
     int32_t nVersion;
     uint256 hashPrevBlock;
@@ -28,13 +52,23 @@ public:
     uint32_t nTime;
     uint32_t nBits;
     uint32_t nNonce;
+    PowV2Proof powv2;
 
     CBlockHeader()
     {
         SetNull();
     }
 
-    SERIALIZE_METHODS(CBlockHeader, obj) { READWRITE(obj.nVersion, obj.hashPrevBlock, obj.hashMerkleRoot, obj.nTime, obj.nBits, obj.nNonce); }
+    SERIALIZE_METHODS(CBlockHeader, obj)
+    {
+        READWRITE(obj.nVersion, obj.hashPrevBlock, obj.hashMerkleRoot, obj.nTime, obj.nBits, obj.nNonce);
+        if (obj.nVersion & VERSION_POWV2) READWRITE(obj.powv2);
+    }
+
+    bool IsPowV2() const { return (nVersion & VERSION_POWV2) != 0; }
+
+    /** sigma input: the 80 v1 bytes followed by batch_root (doc/pouw-v2.md). */
+    void SerializeSeedInput(unsigned char out[112]) const;
 
     void SetNull()
     {
@@ -44,6 +78,7 @@ public:
         nTime = 0;
         nBits = 0;
         nNonce = 0;
+        powv2.SetNull();
     }
 
     bool IsNull() const
@@ -119,6 +154,7 @@ public:
         block.nTime          = nTime;
         block.nBits          = nBits;
         block.nNonce         = nNonce;
+        block.powv2          = powv2;
         return block;
     }
 

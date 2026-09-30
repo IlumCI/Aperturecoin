@@ -1,10 +1,10 @@
 ApertureMatMul v2: proof of useful work by protocol-model inference (specification draft)
 ======================================================================================
 
-Status: draft for review. Nothing here is implemented. v2 replaces v1
-(`doc/matmulpow.md`) on every network before any public network launches, so
-it needs no activation height. The testnet, which is not yet public, will be
-regenerated.
+Status: implemented and tested on regtest (see "Implementation status"
+below). It is activated with `-powv2height=<n>` and uses the built-in tiny
+protocol model. Mainnet and testnet stay on v1 until the protocol model and
+`(r, g)` are fixed. v2 replaces v1 there before any public network launches.
 
 Decisions already taken:
 - **Mining runs the network's own model.** The first workload is embedding
@@ -116,15 +116,18 @@ market.
 
 ### Header
 
-The v2 header adds a 40-byte extension to the 80 v1 bytes:
+The v2 header sets nVersion bit 8 (`VERSION_POWV2`). After the 80 v1 bytes
+it adds 40 bytes of fields plus the ticket's activation panel. The block hash
+covers all of it, so nothing is malleable:
 
 ```
 version | prev | merkle_root | time | bits | nonce       (80 bytes, as v1)
-batch_root (32)   Merkle root of the request batch (request txids, row layout)
+batch_root (32)   BLAKE3 commitment to the block's requests (see "Block body")
 op         (u16)  index of the weight matmul in the model graph (layer, projection)
 tile_i     (u16)  token-row tile          0 <= i < T/r
 tile_j     (u16)  output-feature tile     0 <= j < d_out(op)/r
 span_s     (u16)  K-span                  0 <= s < d_in(op)/(g*r)
+panel      (compact size + r*256 int8)  activation panel of the ticket, |a| <= 95
 ```
 
 - The header's model is implied by height: the `model_id` active at that
@@ -136,11 +139,15 @@ span_s     (u16)  K-span                  0 <= s < d_in(op)/(g*r)
 ### Noise, per op
 
 ```
-X_op  = BLAKE3-XOF("ApertureMatMul/v2/noise" || σ || op)
-E_L (T×r), E_R (r×d_in), F_L (d_in×r), F_R (r×d_out)   ternary, read from X_op
-A'    = A_op + E_L·E_R          (activations entering op)
-W'    = W_op + F_L·F_R          (protocol weights of op)
+X_op,f = BLAKE3-XOF("ApertureMatMul/v2/noise" || σ || op (u16 LE) || f)   f = 0 E_L, 1 E_R, 2 F_L, 3 F_R
+entry  = (byte mod 3) - 1                                  one byte per entry, row-major, seekable
+E_L (rows×r), E_R (r×d_in), F_L (d_in×r), F_R (r×d_out)
+A'     = A_op + E_L·E_R          (activations entering op)
+W'     = W_opᵀ + F_L·F_R         (protocol weights of op)
 ```
+
+Each factor has its own XOF stream. A verifier therefore seeks directly to
+the slices of one ticket, without knowing the batch size.
 
 ### Tickets
 
@@ -208,20 +215,33 @@ authenticity matters only for embedding correctness, which is handled below.
 Block body
 ----------
 
+As implemented (`src/model/embed.{h,cpp}`):
+
 - **Embedding request.** A transaction output
-  `OP_RETURN "APER" <model_id> <input_hash>`, with the raw input carried in
-  the witness (at most 8 KiB), paying a fee per token.
-- **Embedding result**, one per request in the batch, in a coinbase-committed
-  `embeddings` section:
-  - the request txid;
-  - the int8 embedding vector (d_emb bytes);
-  - `act_root`, a Merkle root of the request's intermediate activations at
-    every op boundary.
-- **Consensus checks at block validation:**
-  - `batch_root` matches the listed requests;
-  - every listed request is in this block or in the chain and is unserved;
-  - the fee split: request fees go to a **maturing output**, spendable by the
-    miner after 1,440 blocks (about 2 days) unless forfeited by a fraud proof.
+  `OP_RETURN "APER" <token ids, u24 LE, in pushes of at most 520 bytes>`,
+  paid for by the transaction fee.
+  - The request is identified by its outpoint.
+  - Policy allows one request per transaction, up to 3,100 bytes, exempt
+    from the data-carrier limit.
+  - Mempool and consensus both reject requests that are too long or use
+    token ids outside the vocabulary. The protocol appends EOS.
+- **Embedding result.** One coinbase output per request, in block order:
+  `OP_RETURN "APEM" <request txid> <vout u32 LE> <int8 embedding in pushes of at most 520 bytes>`,
+  with value 0.
+- **batch_root** = `BLAKE3("ApertureBatch/v0" || (txid || vout u32 LE)*)`
+  over the block's requests, in block order.
+- **Consensus checks at block validation** (`ContextualCheckBlock`):
+  - at most `nMaxEmbedRequests` (32) requests;
+  - the header's batch_root matches;
+  - every request can be served;
+  - there is exactly one result per request, in order, equal to the
+    protocol-model embedding.
+
+  Every validating node recomputes every result ("full verification"). This
+  is affordable while the model is small.
+- **Empty batch.** With no pending requests, the miner runs the model on the
+  EOS-only input. The work is real but unpaid, and it shows up as a low
+  useful share.
 
 A miner that finds a ticket partway through the pass finishes the pass (the
 remaining layers) and then publishes. **The final embeddings are the block.**
@@ -231,6 +251,10 @@ Losing miners have also computed embeddings. Two uses are left open:
   (`doc/agent-payments.md`). This is a latency market.
 - Or they rejoin the next block's batch, because requests stay pending until
   served on chain.
+
+**The fraud-proof game below replaces full verification** once the protocol
+model is too expensive for every node to re-run every request. That is the
+case for the placeholder at 440 M MACs per token, and for the project model.
 
 Fraud proofs
 ------------
@@ -292,6 +316,45 @@ Parameter selection (testnet gates)
 4. The fraud-proof game works end to end on testnet: challenge, bisection,
    forfeit and bond.
 5. The K0 bounty on A1 and Fold has been open for at least 4 weeks.
+
+Implementation status
+---------------------
+
+**Done** (regtest, `-powv2height`):
+- `src/crypto/matmulpow_v2`: seed, noise, tickets, Fold, and the KW decode.
+- `src/model`: the .apm loader, the integer profile, the tiny model, and
+  requests and results.
+- The header extension, hashed with the block: batch_root, the ticket fields
+  and the activation panel. The block index stores it.
+- `ContextualCheckBlockHeader`: the v2 flag must match the height.
+- `CheckProofOfWork` over the ticket, using the node's own weights.
+- Full verification of the embedding body, and the mempool request check.
+- The in-node miner (`generatetoaddress`, `generateblock`), which runs the
+  forward pass and searches tickets over the real activations.
+- RPCs: `embed`, `createembeddingrequest`, `getblockembeddings`,
+  `searchembeddings`, and `getblockheader.powv2` including `pow_hash`.
+- `-protocolmodel=<file.apm>` loads another model. Regtest accepts any model
+  file.
+- **Tests.**
+  - `protocolmodel_tests`: golden vectors shared with Python;
+    decode(noisy) = clean; ticket tile = tile of the noisy product.
+  - `feature_pouw_v2.py`:
+    - activation;
+    - a Python/C++ ticket-hash cross-check on real panels;
+    - served requests verified by a second node;
+    - search;
+    - rejection of unservable requests;
+    - an independent Python miner;
+    - rejection of wrong embeddings, out-of-range panels, and v1 headers after
+      activation.
+
+**Not yet:**
+- the fraud-proof game and maturing request fees;
+- external mining over Stratum V2 (`getblocktemplate` refuses v2 templates);
+- optimized CPU and GPU kernels;
+- mainnet and testnet parameters;
+- trimming the panel from the in-memory block index (the Zcash-style
+  header-on-disk approach).
 
 Implementation plan
 -------------------

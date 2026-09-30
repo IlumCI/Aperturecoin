@@ -9,6 +9,8 @@
 
 #include <init.h>
 
+#include <model/embed.h>
+
 #include <addrman.h>
 #include <amount.h>
 #include <banman.h>
@@ -405,6 +407,7 @@ void SetupServerArgs(NodeContext& node)
     argsman.AddArg("-blocknotify=<cmd>", "Execute command when the best block changes (%s in cmd is replaced by block hash)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 #endif
     argsman.AddArg("-blockreconstructionextratxn=<n>", strprintf("Extra transactions to keep in memory for compact block reconstructions (default: %u)", DEFAULT_BLOCK_RECONSTRUCTION_EXTRA_TXN), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-protocolmodel=<file>", "Protocol model (.apm) for ApertureMatMul v2 mining and validation (doc/protocol-model.md). Regtest uses the built-in tiny model by default and accepts any model file.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blocksonly", strprintf("Whether to reject transactions from network peers. Automatic broadcast and rebroadcast of any transactions from inbound peers is disabled, unless the peer has the 'forcerelay' permission. RPC transactions are not affected. (default: %u)", DEFAULT_BLOCKSONLY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-conf=<file>", strprintf("Specify path to read-only configuration file. Relative paths will be prefixed by datadir location. (default: %s)", BITCOIN_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-datadir=<dir>", "Specify data directory", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -1092,6 +1095,24 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     }
 
     fCheckBlockIndex = args.GetBoolArg("-checkblockindex", chainparams.DefaultConsistencyChecks());
+
+    // ApertureMatMul v2 protocol model (doc/pouw-v2.md, doc/protocol-model.md).
+    {
+        const Consensus::Params& cp = chainparams.GetConsensus();
+        const std::string model_path = args.GetArg("-protocolmodel", "");
+        if (cp.nPowV2Height != std::numeric_limits<int>::max() || !model_path.empty()) {
+            if (model_path.empty() && cp.powV2ModelId.empty()) {
+                return InitError(_("ApertureMatMul v2 is active but no -protocolmodel was given"));
+            }
+            std::string error;
+            const bool allow_override = chainparams.NetworkIDString() == CBaseChainParams::REGTEST && !model_path.empty();
+            if (!embed::LoadProtocolModel(model_path, cp.powV2ModelId, cp.nPowV2Rank, allow_override, error)) {
+                return InitError(Untranslated("Cannot load protocol model: " + error));
+            }
+            const intmodel::IntModel* model = embed::GetProtocolModel();
+            LogPrintf("Protocol model %s loaded (%u weight matmuls, rank %u)\n", model->Apm().ModelIdHex(), model->Ops().size(), cp.nPowV2Rank);
+        }
+    }
     fCheckpointsEnabled = args.GetBoolArg("-checkpoints", DEFAULT_CHECKPOINTS_ENABLED);
 
     hashAssumeValid = uint256S(args.GetArg("-assumevalid", chainparams.GetConsensus().defaultAssumeValid.GetHex()));

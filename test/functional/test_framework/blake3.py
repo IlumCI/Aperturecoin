@@ -76,14 +76,15 @@ class _Output:
     def chaining_value(self):
         return _compress(self.cv, self.block_words, self.counter, self.block_len, self.flags)[:8]
 
-    def root_bytes(self, length):
+    def root_bytes(self, length, seek=0):
         out = bytearray()
-        counter = 0
-        while len(out) < length:
+        counter = seek // BLOCK_LEN
+        skip = seek % BLOCK_LEN
+        while len(out) < length + skip:
             words = _compress(self.cv, self.block_words, counter, self.block_len, self.flags | ROOT)
             out += struct.pack("<16I", *words)
             counter += 1
-        return bytes(out[:length])
+        return bytes(out[skip:skip + length])
 
 
 def _chunk_output(chunk, chunk_counter):
@@ -100,11 +101,11 @@ def _parent_output(left_cv, right_cv):
     return _Output(IV, tuple(left_cv) + tuple(right_cv), 0, BLOCK_LEN, PARENT)
 
 
-def blake3(data, length=32):
-    """Return BLAKE3(data) with `length` bytes of output (XOF)."""
+def blake3(data, length=32, seek=0):
+    """Return BLAKE3(data) XOF output bytes [seek, seek + length)."""
     data = bytes(data)
     if _blake3_ext is not None:
-        return _blake3_ext.blake3(data).digest(length=length)
+        return _blake3_ext.blake3(data).digest(length=length, seek=seek)
     chunks = [data[i:i + CHUNK_LEN] for i in range(0, len(data), CHUNK_LEN)] or [b""]
     stack = []
     for counter, chunk in enumerate(chunks[:-1]):
@@ -117,4 +118,4 @@ def blake3(data, length=32):
     output = _chunk_output(chunks[-1], len(chunks) - 1)
     while stack:
         output = _parent_output(stack.pop(), output.chaining_value())
-    return output.root_bytes(length)
+    return output.root_bytes(length, seek)

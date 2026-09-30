@@ -141,6 +141,17 @@ UniValue blockheaderToJSON(const CBlockIndex* tip, const CBlockIndex* blockindex
     result.pushKV("time", (int64_t)blockindex->nTime);
     result.pushKV("mediantime", (int64_t)blockindex->GetMedianTimePast());
     result.pushKV("nonce", (uint64_t)blockindex->nNonce);
+    if (blockindex->nVersion & CBlockHeader::VERSION_POWV2) {
+        UniValue v2(UniValue::VOBJ);
+        v2.pushKV("batch_root", blockindex->powv2.batch_root.GetHex());
+        v2.pushKV("op", blockindex->powv2.op);
+        v2.pushKV("tile_i", blockindex->powv2.tile_i);
+        v2.pushKV("tile_j", blockindex->powv2.tile_j);
+        v2.pushKV("span_s", blockindex->powv2.span_s);
+        v2.pushKV("panel_bytes", (uint64_t)blockindex->powv2.panel.size());
+        v2.pushKV("pow_hash", blockindex->GetBlockHeader().GetPoWHash().GetHex());
+        result.pushKV("powv2", v2);
+    }
     result.pushKV("bits", strprintf("%08x", blockindex->nBits));
     result.pushKV("difficulty", GetDifficulty(blockindex));
     result.pushKV("chainwork", blockindex->nChainWork.GetHex());

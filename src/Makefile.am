@@ -204,6 +204,7 @@ BITCOIN_CORE_H = \
   merkleblock.h \
   miner.h \
   model/apm.h \
+  model/embed.h \
   model/intmodel.h \
   mweb/mweb_db.h \
   mweb/mweb_miner.h \
@@ -378,6 +379,7 @@ libbitcoin_server_a_SOURCES = \
   pow.cpp \
   rest.cpp \
   rpc/blockchain.cpp \
+  rpc/embed.cpp \
   rpc/mining.cpp \
   rpc/misc.cpp \
   rpc/net.cpp \
@@ -559,6 +561,7 @@ libbitcoin_common_a_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES)
 libbitcoin_common_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 libbitcoin_common_a_SOURCES = \
   model/apm.cpp \
+  model/embed.cpp \
   model/intmodel.cpp \
   base58.cpp \
   bech32.cpp \

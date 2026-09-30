@@ -17,6 +17,8 @@ void RegisterNetRPCCommands(CRPCTable &tableRPC);
 void RegisterMiscRPCCommands(CRPCTable &tableRPC);
 /** Register mining RPC commands */
 void RegisterMiningRPCCommands(CRPCTable &tableRPC);
+/** Register embedding (ApertureMatMul v2 protocol model) RPC commands */
+void RegisterEmbedRPCCommands(CRPCTable &tableRPC);
 /** Register raw transaction RPC commands */
 void RegisterRawTransactionRPCCommands(CRPCTable &tableRPC);
 
@@ -27,6 +29,7 @@ static inline void RegisterAllCoreRPCCommands(CRPCTable &t)
     RegisterMiscRPCCommands(t);
     RegisterMiningRPCCommands(t);
     RegisterRawTransactionRPCCommands(t);
+    RegisterEmbedRPCCommands(t);
 }
 
 #endif // BITCOIN_RPC_REGISTER_H

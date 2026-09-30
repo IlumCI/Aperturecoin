@@ -8,6 +8,7 @@
 
 #include <optional.h>
 #include <primitives/block.h>
+#include <model/intmodel.h>
 #include <txmempool.h>
 #include <validation.h>
 #include <mweb/mweb_miner.h>
@@ -32,6 +33,9 @@ struct CBlockTemplate
     std::vector<CAmount> vTxFees;
     std::vector<int64_t> vTxSigOpsCost;
     std::vector<unsigned char> vchCoinbaseCommitment;
+    //! ApertureMatMul v2: quantized inputs of every weight matmul of the
+    //! block's forward pass (requests concatenated per op), used to search tickets.
+    std::vector<intmodel::OpTrace> powv2_trace;
 };
 
 // Container for tracking updates to ancestor feerate as we include (parent)
@@ -150,6 +154,8 @@ private:
     uint64_t nBlockSigOpsCost;
     uint64_t nBlockMWEBWeight;
     uint64_t nBlockMWEBInputs;
+    unsigned int nBlockRequests;
+    bool fPowV2;
     CAmount nFees;
     CTxMemPool::setEntries inBlock;
 
@@ -218,5 +224,19 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
 
 /** Update an old GenerateCoinbaseCommitment from CreateNewBlock after the block txs have changed */
 void RegenerateCommitments(CBlock& block);
+
+/**
+ * ApertureMatMul v2 block body: serve every embedding request in the block
+ * with a coinbase result, set the header batch_root, and return the forward
+ * pass trace for ticket search. Existing results are replaced.
+ */
+bool FillPowV2Body(CBlock& block, std::vector<intmodel::OpTrace>& trace, std::string& error);
+
+/**
+ * Search the tickets of the current header (nonce) over the forward-pass
+ * trace. On success the header's ticket fields and panel are set. Every
+ * ticket tried decrements max_tries.
+ */
+bool SolvePowV2(CBlock& block, const std::vector<intmodel::OpTrace>& trace, const Consensus::Params& params, uint64_t& max_tries);
 
 #endif // BITCOIN_MINER_H

@@ -4742,6 +4742,7 @@ RPCHelpMan importdescriptors();
 RPCHelpMan tokengenesis();
 RPCHelpMan sendtoken();
 RPCHelpMan listtokens();
+RPCHelpMan sendembeddingrequest();
 
 Span<const CRPCCommand> GetWalletRPCCommands()
 {
@@ -4799,6 +4800,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "sendtoken",                        &sendtoken,                     {"address","category","amount","nft_commitment"} },
     { "wallet",             "tokengenesis",                     &tokengenesis,                  {"address","amount","nft"} },
     { "wallet",             "listtokens",                       &listtokens,                    {} },
+    { "wallet",             "sendembeddingrequest",             &sendembeddingrequest,          {"input"} },
     { "wallet",             "sendtoaddress",                    &sendtoaddress,                 {"address","amount","comment","comment_to","subtractfeefromamount","replaceable","conf_target","estimate_mode","avoid_reuse","fee_rate","verbose"} },
     { "wallet",             "sethdseed",                        &sethdseed,                     {"newkeypool","seed"} },
     { "wallet",             "setlabel",                         &setlabel,                      {"address","label"} },

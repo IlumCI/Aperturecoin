@@ -5,6 +5,7 @@
 // Wallet RPCs for native tokens (doc/tokens.md).
 
 #include <core_io.h>
+#include <model/embed.h>
 #include <key_io.h>
 #include <policy/policy.h>
 #include <primitives/token.h>
@@ -364,6 +365,74 @@ RPCHelpMan listtokens()
     result.pushKV("balances", balances_json);
     result.pushKV("outputs", outputs);
     return result;
+},
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Embedding requests (ApertureMatMul v2, doc/pouw-v2.md)
+
+RPCHelpMan sendembeddingrequest()
+{
+    return RPCHelpMan{"sendembeddingrequest",
+        "\nPay miners to embed an input with the protocol model. The request is served, with the exact\n"
+        "protocol-model embedding, by the block that includes it (see getblockembeddings)." +
+            HELP_REQUIRING_PASSPHRASE,
+        {
+            {"input", RPCArg::Type::STR, RPCArg::Optional::NO, "Text (byte-tokenizer models) or a JSON array of token ids"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::STR_HEX, "txid", "Request transaction"},
+                {RPCResult::Type::NUM, "vout", "Request output"},
+                {RPCResult::Type::NUM, "tokens", "Token ids requested"},
+                {RPCResult::Type::STR_AMOUNT, "fee", "Fee paid"},
+            }},
+        RPCExamples{HelpExampleCli("sendembeddingrequest", "\"hello world\"") + HelpExampleCli("sendembeddingrequest", "\"[9707, 1879]\"")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    std::shared_ptr<CWallet> const wallet = GetWalletForJSONRPCRequest(request);
+    if (!wallet) return NullUniValue;
+    CWallet& w{*wallet};
+    w.BlockUntilSyncedToCurrentChain();
+
+    const intmodel::IntModel* model = embed::GetProtocolModel();
+    if (!model) throw JSONRPCError(RPC_MISC_ERROR, "No protocol model loaded (ApertureMatMul v2 inactive)");
+    std::vector<uint32_t> ids;
+    const UniValue& in = request.params[0];
+    UniValue parsed;
+    if (in.isStr() && parsed.read(in.get_str()) && parsed.isArray()) {
+        for (size_t k = 0; k < parsed.size(); ++k) ids.push_back(static_cast<uint32_t>(parsed[k].get_int64()));
+    } else if (in.isArray()) {
+        for (size_t k = 0; k < in.size(); ++k) ids.push_back(static_cast<uint32_t>(in[k].get_int64()));
+    } else if (in.isStr() && model->Config().tokenizer == "bytes") {
+        for (unsigned char c : in.get_str()) ids.push_back(c);
+    } else {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "This model needs an array of token ids");
+    }
+    if (embed::ModelInput(*model, ids).empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, "input cannot be served by the protocol model");
+
+    LOCK(w.cs_wallet);
+    EnsureWalletIsUnlocked(&w);
+    std::vector<CRecipient> recipients{{DestinationAddr(embed::MakeRequestScript(ids)), 0, false}};
+    CCoinControl coin_control;
+    CAmount fee{0};
+    int change_pos{-1};
+    bilingual_str error;
+    CTransactionRef tx;
+    FeeCalculation fee_calc;
+    if (!w.CreateTransaction(recipients, tx, fee, change_pos, error, coin_control, fee_calc, true)) {
+        throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, error.original);
+    }
+    w.CommitTransaction(tx, {}, {});
+    UniValue out(UniValue::VOBJ);
+    out.pushKV("txid", tx->GetHash().GetHex());
+    for (uint32_t n = 0; n < tx->vout.size(); ++n) {
+        if (embed::IsRequestScript(tx->vout[n].scriptPubKey)) out.pushKV("vout", (uint64_t)n);
+    }
+    out.pushKV("tokens", (uint64_t)ids.size());
+    out.pushKV("fee", ValueFromAmount(fee));
+    return out;
 },
     };
 }

@@ -10,6 +10,7 @@
 #include <util/strencodings.h>
 #include <crypto/common.h>
 #include <crypto/matmulpow.h>
+#include <crypto/matmulpow_v2.h>
 
 #include <mutex>
 #include <unordered_map>
@@ -52,9 +53,15 @@ void CBlockHeader::SerializeHeader(unsigned char out[80]) const
     WriteLE32(out + 76, nNonce);
 }
 
+void CBlockHeader::SerializeSeedInput(unsigned char out[112]) const
+{
+    SerializeHeader(out);
+    memcpy(out + 80, powv2.batch_root.begin(), 32);
+}
+
 uint256 CBlockHeader::GetPoWHash() const
 {
-    const unsigned int dim = matmulpow::GetDefaultDim();
+    const unsigned int dim = IsPowV2() ? 0 : matmulpow::GetDefaultDim();
     const uint256 block_hash = GetHash();
     {
         std::lock_guard<std::mutex> lock(g_pow_cache_mutex);
@@ -72,6 +79,24 @@ uint256 CBlockHeader::GetPoWHash() const
 
 uint256 CBlockHeader::GetUncachedPoWHash(unsigned int dim) const
 {
+    if (IsPowV2()) {
+        // Invalid tickets map to the maximum hash, which fails every target.
+        uint256 pow_hash{uint256S("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")};
+        const unsigned int r = matmulpow_v2::GetRank();
+        const std::vector<matmulpow_v2::Op>& ops = matmulpow_v2::GetOps();
+        if (!matmulpow_v2::HasModel() || powv2.op >= ops.size() || powv2.panel.size() != r * matmulpow_v2::GROUP) return pow_hash;
+        unsigned char seed_input[112], sigma[32];
+        SerializeSeedInput(seed_input);
+        matmulpow_v2::Seed(seed_input, sizeof(seed_input), sigma);
+        matmulpow_v2::Ticket t;
+        t.op = powv2.op;
+        t.i = powv2.tile_i;
+        t.j = powv2.tile_j;
+        t.s = powv2.span_s;
+        uint256 out;
+        if (matmulpow_v2::TicketPoW(sigma, r, ops[t.op], t, powv2.panel.data(), out.begin())) pow_hash = out;
+        return pow_hash;
+    }
     unsigned char header[80];
     SerializeHeader(header);
     uint256 pow_hash;

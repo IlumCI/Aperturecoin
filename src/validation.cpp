@@ -5,6 +5,8 @@
 
 #include <validation.h>
 
+#include <model/embed.h>
+
 #include <arith_uint256.h>
 #include <chain.h>
 #include <chainparams.h>
@@ -615,6 +617,18 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     std::string reason;
     if (fRequireStandard && !IsStandardTx(tx, reason))
         return state.Invalid(TxValidationResult::TX_NOT_STANDARD, reason);
+
+    // Embedding requests must be servable by the protocol model, otherwise no
+    // valid block could include them (doc/pouw-v2.md).
+    if (const intmodel::IntModel* model = embed::GetProtocolModel()) {
+        for (const CTxOut& out : tx.vout) {
+            std::vector<uint32_t> ids;
+            if (embed::IsRequestScript(out.scriptPubKey) &&
+                (!embed::ParseRequest(out.scriptPubKey, ids) || embed::ModelInput(*model, ids).empty())) {
+                return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-embed-request");
+            }
+        }
+    }
 
     // Do not work on transactions that are too small.
     // A transaction with 1 segwit input and 1 P2WPHK output has non-witness size of 82 bytes.
@@ -1929,6 +1943,7 @@ int32_t ComputeBlockVersion(const CBlockIndex* pindexPrev, const Consensus::Para
 {
     LOCK(cs_main);
     int32_t nVersion = VERSIONBITS_TOP_BITS;
+    if ((pindexPrev ? pindexPrev->nHeight + 1 : 0) >= params.nPowV2Height) nVersion |= CBlockHeader::VERSION_POWV2;
 
     for (int i = 0; i < (int)Consensus::MAX_VERSION_BITS_DEPLOYMENTS; i++) {
         ThresholdState state = VersionBitsState(pindexPrev, params, static_cast<Consensus::DeploymentPos>(i), versionbitscache);
@@ -3679,6 +3694,10 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
     if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams))
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-diffbits", "incorrect proof of work");
 
+    // ApertureMatMul v2 header extension exactly from the activation height.
+    if (block.IsPowV2() != (nHeight >= consensusParams.nPowV2Height))
+        return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-powv2-version", "ApertureMatMul v2 flag does not match the height");
+
     // Check against checkpoints
     if (fCheckpointsEnabled) {
         // Don't accept any forks from the main chain prior to last checkpoint.
@@ -3765,6 +3784,15 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
         }
         if (!found) {
             return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-devfund", "coinbase does not pay the development fund");
+        }
+    }
+
+    // ApertureMatMul v2: every embedding request in the block is served by an
+    // exact protocol-model result in the coinbase (doc/pouw-v2.md).
+    if (nHeight >= consensusParams.nPowV2Height) {
+        const std::string reject = embed::CheckBlockEmbeddings(block, consensusParams);
+        if (!reject.empty()) {
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, reject, "invalid embedding requests or results");
         }
     }
 

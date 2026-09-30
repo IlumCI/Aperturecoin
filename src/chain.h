@@ -184,6 +184,9 @@ public:
     uint32_t nTime{0};
     uint32_t nBits{0};
     uint32_t nNonce{0};
+    //! ApertureMatMul v2 header extension (empty unless nVersion has VERSION_POWV2).
+    //! Kept in memory with the index; r x 256 bytes per block (doc/pouw-v2.md).
+    PowV2Proof powv2;
 
     //! MWEB data (only populated when BLOCK_HAVE_MWEB is set)
     mw::Header::CPtr mweb_header{nullptr};
@@ -205,7 +208,8 @@ public:
           hashMerkleRoot{block.hashMerkleRoot},
           nTime{block.nTime},
           nBits{block.nBits},
-          nNonce{block.nNonce}
+          nNonce{block.nNonce},
+          powv2{block.powv2}
     {
     }
 
@@ -237,6 +241,7 @@ public:
         block.nTime          = nTime;
         block.nBits          = nBits;
         block.nNonce         = nNonce;
+        block.powv2          = powv2;
         return block;
     }
 
@@ -370,6 +375,7 @@ public:
         READWRITE(obj.nTime);
         READWRITE(obj.nBits);
         READWRITE(obj.nNonce);
+        if (obj.nVersion & CBlockHeader::VERSION_POWV2) READWRITE(obj.powv2);
     }
 
     uint256 GetBlockHash() const
@@ -381,6 +387,7 @@ public:
         block.nTime           = nTime;
         block.nBits           = nBits;
         block.nNonce          = nNonce;
+        block.powv2           = powv2;
         return block.GetHash();
     }
 
