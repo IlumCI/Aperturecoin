@@ -1,0 +1,300 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 4acbddf..6dbb766 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -139,6 +139,10 @@ if(BUILD_MINE)
+     aperture-sv2-miner.cpp
+     aperture/blake3_unit.cpp
+     ${APERTURE_SRC}/src/crypto/matmulpow.cpp
++    # ApertureMatMul v2: tickets and the integer protocol model (bit-exact with the node).
++    ${APERTURE_SRC}/src/crypto/matmulpow_v2.cpp
++    ${APERTURE_SRC}/src/model/apm.cpp
++    ${APERTURE_SRC}/src/model/intmodel.cpp
+   )
+   # AFTER: sv2-tp's own headers take precedence; only crypto/matmulpow.h and
+   # crypto/blake3/ are taken from the ApertureCoin tree.
+@@ -146,6 +150,7 @@ if(BUILD_MINE)
+   target_link_libraries(aperture-sv2-miner
+     core_interface
+     bitcoin_sv2
++    aperture_univalue
+   )
+   install_binary_component(aperture-sv2-miner)
+ endif()
+diff --git a/src/interfaces/mining.h b/src/interfaces/mining.h
+index ff80b00..497423f 100644
+--- a/src/interfaces/mining.h
++++ b/src/interfaces/mining.h
+@@ -103,6 +103,23 @@ public:
+      * Interrupts the current wait for the next block template.
+     */
+     virtual void interruptWait() = 0;
++
++    /**
++     * ApertureCoin: payload of the Stratum V2 extension message announcing the
++     * useful work of this template (doc/stratum-v2.md), without the template
++     * id. Empty if the template needs none.
++     */
++    virtual std::vector<uint8_t> apertureUsefulWork() { return {}; }
++
++    /**
++     * ApertureCoin: construct and submit a block from a SubmitUsefulWorkSolution
++     * payload (without the template id).
++     */
++    virtual bool apertureSubmitUsefulWork(const std::vector<uint8_t>& payload, std::string& reason)
++    {
++        reason = "unsupported";
++        return false;
++    }
+ };
+ 
+ //! Interface giving clients (RPC, Stratum v2 Template Provider in the future)
+diff --git a/src/sv2/connman.cpp b/src/sv2/connman.cpp
+index a8f03c7..d4a390d 100644
+--- a/src/sv2/connman.cpp
++++ b/src/sv2/connman.cpp
+@@ -258,6 +258,16 @@ void Sv2Connman::EventGotPermanentReadError(NodeId node_id, const std::string& e
+ 
+ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& client)
+ {
++    if (sv2_net_msg.m_extension_type != 0) {
++        LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Received extension 0x%04x message 0x%02x from client id=%zu\n",
++                      sv2_net_msg.m_extension_type, uint8_t(sv2_net_msg.m_msg_type), client.m_id);
++        {
++            LOCK(client.cs_status);
++            if (!client.m_setup_connection_confirmed || client.m_disconnect_flag) return;
++        }
++        m_msgproc->ExtensionMessage(client, sv2_net_msg);
++        return;
++    }
+     uint8_t msg_type[1] = {uint8_t(sv2_net_msg.m_msg_type)};
+     LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Received 0x%s %s from client id=%zu\n",
+                    // After clang-17:
+diff --git a/src/sv2/connman.h b/src/sv2/connman.h
+index 94025e8..d6f84e3 100644
+--- a/src/sv2/connman.h
++++ b/src/sv2/connman.h
+@@ -112,6 +112,11 @@ public:
+      */
+     virtual void SubmitSolution(node::Sv2SubmitSolutionMsg solution) = 0;
+ 
++    /**
++     * ApertureCoin: a message with a non-zero extension_type (doc/stratum-v2.md).
++     */
++    virtual void ExtensionMessage(Sv2Client& client, const node::Sv2NetMsg& msg) {}
++
+     virtual ~Sv2EventsInterface() = default;
+ };
+ 
+diff --git a/src/sv2/messages.h b/src/sv2/messages.h
+index 2e576d0..9975211 100644
+--- a/src/sv2/messages.h
++++ b/src/sv2/messages.h
+@@ -14,6 +14,7 @@
+ #include <sv2/coinbase_template.h>
+ #include <streams.h>
+ #include <string>
++#include <tinyformat.h>
+ #include <vector>
+ #include <uint256.h>
+ #include <util/check.h>
+@@ -45,6 +46,17 @@ enum class Sv2MsgType : uint8_t {
+     COINBASE_OUTPUT_CONSTRAINTS = 0x70,
+ };
+ 
++/**
++ * ApertureCoin Stratum V2 extension (doc/stratum-v2.md). Messages of this
++ * extension carry extension_type SV2_EXT_APERTURE in the frame header, so
++ * their message types do not collide with the standard ones.
++ */
++static constexpr uint16_t SV2_EXT_APERTURE = 0x4150; // "AP"
++enum ApertureMsgType : uint8_t {
++    APERTURE_USEFUL_WORK_TEMPLATE = 0x01,      //!< TP -> client: template_id, batch_root, model, rank, requests
++    APERTURE_SUBMIT_USEFUL_WORK = 0x02,        //!< client -> TP: v2 solution (ticket, panel, coinbase)
++};
++
+ static const std::map<Sv2MsgType, std::string> SV2_MSG_NAMES{
+     {Sv2MsgType::SETUP_CONNECTION, "SetupConnection"},
+     {Sv2MsgType::SETUP_CONNECTION_SUCCESS, "SetupConnectionSuccess"},
+@@ -607,15 +619,16 @@ public:
+      */
+     uint32_t m_msg_len;
+ 
++    /** extension_type field (0 for the standard protocol). */
++    uint16_t m_extension_type{0};
++
+     Sv2NetHeader() = default;
+-    explicit Sv2NetHeader(Sv2MsgType msg_type, uint32_t msg_len) : m_msg_type{msg_type}, m_msg_len{msg_len} {};
++    explicit Sv2NetHeader(Sv2MsgType msg_type, uint32_t msg_len, uint16_t extension_type = 0) : m_msg_type{msg_type}, m_msg_len{msg_len}, m_extension_type{extension_type} {};
+ 
+     template <typename Stream>
+     void Serialize(Stream& s) const
+     {
+-        // The template provider currently does not use the extension_type field,
+-        // but the field is still required for all headers.
+-        uint16_t extension_type = 0;
++        const uint16_t extension_type = m_extension_type;
+ 
+         u24_t msg_len;
+         msg_len[2] = (m_msg_len >> 16) & 0xff;
+@@ -630,9 +643,7 @@ public:
+     template <typename Stream>
+     void Unserialize(Stream& s)
+     {
+-        // Ignore the first 2 bytes (extension type) as the template provider currently doesn't
+-        // interpret this field.
+-        s.ignore(2);
++        s >> m_extension_type;
+ 
+         uint8_t msg_type;
+         s >> msg_type;
+@@ -658,13 +669,19 @@ class Sv2NetMsg
+ public:
+     Sv2MsgType m_msg_type;
+     std::vector<uint8_t> m_msg;
++    uint16_t m_extension_type{0};
++
++    explicit Sv2NetMsg(const Sv2MsgType msg_type, const std::vector<uint8_t>&& msg, uint16_t extension_type = 0) : m_msg_type{msg_type}, m_msg{msg}, m_extension_type{extension_type} {};
+ 
+-    explicit Sv2NetMsg(const Sv2MsgType msg_type, const std::vector<uint8_t>&& msg) : m_msg_type{msg_type}, m_msg{msg} {};
++    // The extension_type travels in the wrapper's m_type string ("" for the
++    // standard protocol) so the wrapped byte format stays unchanged.
++    static std::string ExtensionTag(uint16_t extension_type) { return extension_type ? strprintf("sv2ext:%u", extension_type) : ""; }
++    static uint16_t ParseExtensionTag(const std::string& tag) { return tag.rfind("sv2ext:", 0) == 0 ? static_cast<uint16_t>(std::stoul(tag.substr(7))) : 0; }
+ 
+     // Unwrap CSerializedNetMsg
+     Sv2NetMsg(CSerializedNetMsg&& net_msg)
+     {
+-        Assume(net_msg.m_type == "");
++        m_extension_type = ParseExtensionTag(net_msg.m_type);
+         DataStream ss(MakeByteSpan(net_msg.data));
+         Unserialize(ss);
+     };
+@@ -672,13 +689,14 @@ public:
+     // Unwrap CNetMessage
+     Sv2NetMsg(CNetMessage net_msg)
+     {
++        m_extension_type = ParseExtensionTag(net_msg.m_type);
+         Unserialize(net_msg.m_recv);
+     };
+ 
+     operator CSerializedNetMsg()
+     {
+         CSerializedNetMsg net_msg;
+-        net_msg.m_type = "";
++        net_msg.m_type = ExtensionTag(m_extension_type);
+         DataStream ser;
+         Serialize(ser);
+         net_msg.data.resize(ser.size());
+@@ -692,6 +710,7 @@ public:
+         DataStream msg;
+         Serialize(msg);
+         CNetMessage ret{std::move(msg)};
++        ret.m_type = ExtensionTag(m_extension_type);
+         return ret;
+     }
+ 
+@@ -716,6 +735,7 @@ public:
+         Sv2NetHeader hdr;
+         hdr.m_msg_type = m_msg_type;
+         hdr.m_msg_len = static_cast<uint32_t>(m_msg.size());
++        hdr.m_extension_type = m_extension_type;
+         return hdr;
+     }
+ 
+diff --git a/src/sv2/template_provider.cpp b/src/sv2/template_provider.cpp
+index c792e72..daa7d91 100644
+--- a/src/sv2/template_provider.cpp
++++ b/src/sv2/template_provider.cpp
+@@ -634,6 +634,34 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
+         SaveBlockAsync(block_template, submitted);
+ }
+ 
++void Sv2TemplateProvider::ExtensionMessage(Sv2Client& client, const node::Sv2NetMsg& msg)
++{
++    if (msg.m_extension_type != node::SV2_EXT_APERTURE || uint8_t(msg.m_msg_type) != node::APERTURE_SUBMIT_USEFUL_WORK || msg.m_msg.size() < 8) {
++        LogPrintLevel(BCLog::SV2, BCLog::Level::Warning, "Ignoring extension 0x%04x message 0x%02x from client id=%zu\n",
++                      msg.m_extension_type, uint8_t(msg.m_msg_type), client.m_id);
++        return;
++    }
++    uint64_t template_id;
++    SpanReader{std::span<const uint8_t>{msg.m_msg}.first(8)} >> template_id;
++    std::shared_ptr<BlockTemplate> block_template;
++    {
++        LOCK(m_tp_mutex);
++        auto cached = m_block_template_cache.find(template_id);
++        if (cached == m_block_template_cache.end()) {
++            LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Template with id=%lu is no longer in cache\n", template_id);
++            return;
++        }
++        block_template = cached->second.second;
++    }
++    std::string reason;
++    const bool submitted{block_template->apertureSubmitUsefulWork({msg.m_msg.begin() + 8, msg.m_msg.end()}, reason)};
++    if (!submitted) {
++        LogWarning("Useful-work block was not accepted: %s\n", reason.empty() ? std::string{"unknown reason"} : reason);
++    } else {
++        LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Useful-work block for template id=%lu accepted\n", template_id);
++    }
++}
++
+ void Sv2TemplateProvider::SaveBlockAsync(std::shared_ptr<BlockTemplate> block_template, bool submitted)
+ {
+     // Briefly wait (so we can focus on the next template) and then fetch and
+@@ -698,9 +726,18 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, uint64_t template_id, Bloc
+                                          future_template};
+ 
+     LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Send 0x71 NewTemplate id=%lu future=%d to client id=%zu\n", template_id, future_template, client.m_id);
++    // ApertureCoin: announce the template's useful work right after it.
++    const std::vector<uint8_t> useful_work{block_template.apertureUsefulWork()};
+     {
+         LOCK(client.cs_send);
+         client.m_send_messages.emplace_back(new_template);
++        if (!useful_work.empty()) {
++            std::vector<uint8_t> payload;
++            VectorWriter{payload, 0, template_id};
++            payload.insert(payload.end(), useful_work.begin(), useful_work.end());
++            LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Send UsefulWorkTemplate id=%lu (%zu bytes) to client id=%zu\n", template_id, payload.size(), client.m_id);
++            client.m_send_messages.emplace_back(node::Sv2NetMsg{static_cast<node::Sv2MsgType>(node::APERTURE_USEFUL_WORK_TEMPLATE), std::move(payload), node::SV2_EXT_APERTURE});
++        }
+ 
+         if (future_template) {
+             node::Sv2SetNewPrevHashMsg new_prev_hash{header, template_id};
+diff --git a/src/sv2/template_provider.h b/src/sv2/template_provider.h
+index fff89f6..a645456 100644
+--- a/src/sv2/template_provider.h
++++ b/src/sv2/template_provider.h
+@@ -200,6 +200,11 @@ public:
+ 
+     void SubmitSolution(node::Sv2SubmitSolutionMsg solution) EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex) override;
+ 
++
++    /** ApertureCoin extension messages (SubmitUsefulWorkSolution). */
++
++    void ExtensionMessage(Sv2Client& client, const node::Sv2NetMsg& msg) EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex) override;
++
+     /* Block templates that connected clients may be working on */
+     BlockTemplateCache& GetBlockTemplates() EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex) { return m_block_template_cache; }
+ 
+diff --git a/src/sv2/transport.cpp b/src/sv2/transport.cpp
+index a6841f5..ccde9d9 100644
+--- a/src/sv2/transport.cpp
++++ b/src/sv2/transport.cpp
+@@ -170,7 +170,7 @@ bool Sv2Transport::SetMessageToSend(CSerializedNetMsg& msg) noexcept
+     // The Sv2NetMsg is wrapped inside a dummy CSerializedNetMsg, extract it:
+     Sv2NetMsg sv2_msg(std::move(msg));
+     // Reconstruct the header:
+-    Sv2NetHeader hdr(sv2_msg.m_msg_type, sv2_msg.size());
++    Sv2NetHeader hdr(sv2_msg.m_msg_type, sv2_msg.size(), sv2_msg.m_extension_type);
+ 
+     // Construct ciphertext in send buffer.
+     const size_t encrypted_msg_size = Sv2Cipher::EncryptedMessageSize(sv2_msg.size());
+@@ -424,7 +424,7 @@ bool Sv2Transport::ProcessReceivedPacketBytes() noexcept
+         // Wipe the receive buffer where the next packet will be received into.
+         ClearShrink(m_recv_buffer);
+ 
+-        Sv2NetMsg message{m_header.m_msg_type, std::move(payload)};
++        Sv2NetMsg message{m_header.m_msg_type, std::move(payload), m_header.m_extension_type};
+         m_message = std::move(message);
+ 
+         // At this point we have a valid message decrypted into m_message.

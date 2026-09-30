@@ -1,0 +1,267 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index b0e3f52..4acbddf 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -97,6 +97,29 @@ target_link_libraries(bitcoin_common
+ 
+ include(InstallBinaryComponent)
+ 
++# ApertureCoin: JSON-RPC Mining backend (ApertureCoin Core 0.21 has no Mining
++# IPC interface) and the reference Stratum V2 CPU miner. Sources shared with
++# the node (univalue, ApertureMatMul, BLAKE3) come from APERTURE_SRC.
++set(APERTURE_SRC "" CACHE PATH "Path to the ApertureCoin source tree")
++if(NOT APERTURE_SRC OR NOT EXISTS "${APERTURE_SRC}/src/crypto/matmulpow.cpp")
++  message(FATAL_ERROR "Set -DAPERTURE_SRC=<path to the ApertureCoin source tree>")
++endif()
++add_library(aperture_univalue STATIC EXCLUDE_FROM_ALL
++  ${APERTURE_SRC}/src/univalue/lib/univalue.cpp
++  ${APERTURE_SRC}/src/univalue/lib/univalue_get.cpp
++  ${APERTURE_SRC}/src/univalue/lib/univalue_read.cpp
++  ${APERTURE_SRC}/src/univalue/lib/univalue_write.cpp
++)
++target_include_directories(aperture_univalue PUBLIC ${APERTURE_SRC}/src/univalue/include)
++add_library(aperture_rpc STATIC EXCLUDE_FROM_ALL
++  aperture/rpc_client.cpp
++  aperture/rpc_mining.cpp
++)
++target_link_libraries(aperture_rpc
++  PRIVATE core_interface
++  PUBLIC aperture_univalue bitcoin_sv2
++)
++
+ if(BUILD_MINE)
+   add_executable(sv2-tp
+     sv2-tp.cpp
+@@ -108,8 +131,23 @@ if(BUILD_MINE)
+     core_interface
+     $<$<BOOL:${ENABLE_IPC}>:bitcoin_ipc>
+     bitcoin_sv2 # bitcoin_common now transitively provided PUBLIC by bitcoin_sv2
++    aperture_rpc
+   )
+   install_binary_component(sv2-tp HAS_MANPAGE)
++
++  add_executable(aperture-sv2-miner
++    aperture-sv2-miner.cpp
++    aperture/blake3_unit.cpp
++    ${APERTURE_SRC}/src/crypto/matmulpow.cpp
++  )
++  # AFTER: sv2-tp's own headers take precedence; only crypto/matmulpow.h and
++  # crypto/blake3/ are taken from the ApertureCoin tree.
++  target_include_directories(aperture-sv2-miner AFTER PRIVATE ${APERTURE_SRC}/src)
++  target_link_libraries(aperture-sv2-miner
++    core_interface
++    bitcoin_sv2
++  )
++  install_binary_component(aperture-sv2-miner)
+ endif()
+ 
+ ## Kernel library is not used in this repository; remove optional subdirectory.
+diff --git a/src/sv2-tp.cpp b/src/sv2-tp.cpp
+index 0cb69ec..b86e459 100644
+--- a/src/sv2-tp.cpp
++++ b/src/sv2-tp.cpp
+@@ -12,6 +12,7 @@
+ #include <compat/compat.h>
+ #include <init/common.h>
+ #include <interfaces/init.h>
++#include <aperture/rpc_mining.h>
+ #include <interfaces/ipc.h>
+ #include <ipc/exception.h>
+ #include <logging.h>
+@@ -118,6 +119,11 @@ static void AddArgs(ArgsManager& args)
+     args.AddArg("-conf=<file>", "Specify path to the configuration file (default: sv2-tp.conf inside the datadir). Set -conf=0 to disable loading any configuration file.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+     args.AddArg("-pid=<file>", strprintf("Specify pid file. Relative paths will be prefixed by a net-specific datadir location. (default: %s)", SV2_TP_PID_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+     args.AddArg("-ipcconnect=<address>", "Connect to bitcoin-node process in the background to perform online operations. Valid <address> values are 'unix' to connect to the default socket, 'unix:<socket path>' to connect to a socket at a nonstandard path. Default value: unix", ArgsManager::ALLOW_ANY, OptionsCategory::IPC);
++    args.AddArg("-rpcconnect=<ip>", "ApertureCoin: use apertured's JSON-RPC interface at <ip> instead of IPC (ApertureCoin Core 0.21 has no Mining IPC interface)", ArgsManager::ALLOW_ANY, OptionsCategory::IPC);
++    args.AddArg("-rpcport=<port>", "ApertureCoin: apertured RPC port (default: 9432, testnet: 19432, regtest: 19543)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::IPC);
++    args.AddArg("-rpcuser=<user>", "ApertureCoin: apertured RPC user (default: use the cookie file)", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::IPC);
++    args.AddArg("-rpcpassword=<pw>", "ApertureCoin: apertured RPC password", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::IPC);
++    args.AddArg("-rpccookiefile=<file>", "ApertureCoin: apertured RPC cookie file (default: <datadir>/.cookie)", ArgsManager::ALLOW_ANY, OptionsCategory::IPC);
+     args.AddArg("-sv2bind=<addr>[:<port>]", strprintf("Bind to given address and always listen on it (default: 127.0.0.1). Use [host]:port notation for IPv6."), ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
+     args.AddArg("-sv2port=<port>", strprintf("Listen for Stratum v2 connections on <port> (default: %u, testnet3: %u, testnet4: %u, signet: %u, regtest: %u).", defaultBaseParams->Sv2Port(), testnetBaseParams->Sv2Port(), testnet4BaseParams->Sv2Port(), signetBaseParams->Sv2Port(), regtestBaseParams->Sv2Port()), ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
+     args.AddArg("-templateinterval", strprintf("Minimum seconds between fee-based template updates. New blocks always propagate immediately. (default: %d)", Sv2TemplateProviderOptions().template_interval.count()), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
+@@ -237,35 +243,32 @@ MAIN_FUNCTION
+         options.template_interval = std::chrono::seconds(args.GetIntArg("-templateinterval", 0));
+     }
+ 
+-    // Connect to bitcoin-node via IPC
+-    //
+-    // If the node is not available, keep retrying in a loop.
+-    std::unique_ptr<interfaces::Init> mine_init{interfaces::MakeBasicInit("sv2-tp", argc > 0 ? argv[0] : "")};
+-    assert(mine_init);
+-    std::string address{args.GetArg("-ipcconnect", "unix")};
+-
+-    LogPrintf("Attempting IPC connection to bitcoin-node at %s\n", address);
+-    LogPrintf("Ensure Bitcoin Core is running with '-ipcbind=unix' and the correct network (%s)\n",
+-              ChainTypeToString(chain_type));
+-
+-    const auto connect_to_node = [&]() -> std::pair<std::unique_ptr<interfaces::Init>, std::unique_ptr<interfaces::Mining>> {
++    std::unique_ptr<interfaces::Init> node_init;
++    std::unique_ptr<interfaces::Mining> mining;
++    const bool use_rpc{args.IsArgSet("-rpcconnect") || args.IsArgSet("-rpcport") || args.IsArgSet("-rpcuser") || args.IsArgSet("-rpccookiefile")};
++    if (use_rpc) {
++        // ApertureCoin: JSON-RPC backend (see aperture/rpc_mining.h).
++        const std::string host{args.GetArg("-rpcconnect", "127.0.0.1")};
++        const uint16_t default_port{static_cast<uint16_t>(chain_type == ChainType::REGTEST ? 19543 : chain_type == ChainType::MAIN ? 9432 : 19432)};
++        const uint16_t port{static_cast<uint16_t>(args.GetIntArg("-rpcport", default_port))};
++        const auto make_client = [&]() {
++            if (args.IsArgSet("-rpcuser")) {
++                return aperture::RpcClient(host, port, args.GetArg("-rpcuser", ""), args.GetArg("-rpcpassword", ""));
++            }
++            const fs::path cookie{args.IsArgSet("-rpccookiefile") ? fs::PathFromString(args.GetArg("-rpccookiefile", "")) : args.GetDataDirNet() / ".cookie"};
++            return aperture::RpcClient::FromCookie(host, port, fs::PathToString(cookie));
++        };
+         auto retry_delay = IPC_RECONNECT_INITIAL_DELAY;
+         while (!g_interrupt) {
+             try {
+-                std::unique_ptr<interfaces::Init> node_init = mine_init->ipc()->connectAddress(address);
+-                if (!node_init) {
+-                    throw std::runtime_error("IPC connection returned no remote init interface");
+-                }
+-                std::unique_ptr<interfaces::Mining> mining = node_init->makeMining();
+-                if (!mining) {
+-                    throw std::runtime_error("IPC connection returned no mining interface");
+-                }
+-                LogPrintf("Connected to bitcoin-node via IPC at: %s\n", address);
+-                return {std::move(node_init), std::move(mining)};
++                auto state{std::make_shared<aperture::RpcMiningState>(make_client())};
++                auto rpc_mining{std::make_unique<aperture::RpcMining>(state)};
++                (void)rpc_mining->getTip();
++                mining = std::move(rpc_mining);
++                LogPrintf("Connected to apertured via JSON-RPC at %s:%d\n", host, port);
++                break;
+             } catch (const std::exception& exception) {
+-                LogPrintf("IPC connection failed: %s\n", exception.what());
+-                LogPrintf("Retrying in %d seconds... (Ensure Bitcoin Core is running with '-ipcbind=unix')\n",
+-                          retry_delay.count());
++                LogPrintf("RPC connection failed: %s (retrying in %d seconds)\n", exception.what(), retry_delay.count());
+                 auto waited{0ms};
+                 while (!g_interrupt && waited < retry_delay) {
+                     std::this_thread::sleep_for(IPC_RECONNECT_POLL_INTERVAL);
+@@ -274,15 +277,56 @@ MAIN_FUNCTION
+                 retry_delay = std::min(retry_delay * 2, IPC_RECONNECT_MAX_DELAY);
+             }
+         }
+-        return {};
+-    };
+-
+-    auto connection = connect_to_node();
+-    auto node_init = std::move(connection.first);
+-    auto mining = std::move(connection.second);
+-    if (g_interrupt) return EXIT_SUCCESS;
+-    assert(node_init);
+-    assert(mining);
++        if (g_interrupt) return EXIT_SUCCESS;
++        assert(mining);
++    } else {
++        // Connect to bitcoin-node via IPC
++        //
++        // If the node is not available, keep retrying in a loop.
++        std::unique_ptr<interfaces::Init> mine_init{interfaces::MakeBasicInit("sv2-tp", argc > 0 ? argv[0] : "")};
++        assert(mine_init);
++        std::string address{args.GetArg("-ipcconnect", "unix")};
++
++        LogPrintf("Attempting IPC connection to bitcoin-node at %s\n", address);
++        LogPrintf("Ensure Bitcoin Core is running with '-ipcbind=unix' and the correct network (%s)\n",
++                  ChainTypeToString(chain_type));
++
++        const auto connect_to_node = [&]() -> std::pair<std::unique_ptr<interfaces::Init>, std::unique_ptr<interfaces::Mining>> {
++            auto retry_delay = IPC_RECONNECT_INITIAL_DELAY;
++            while (!g_interrupt) {
++                try {
++                    std::unique_ptr<interfaces::Init> node_init = mine_init->ipc()->connectAddress(address);
++                    if (!node_init) {
++                        throw std::runtime_error("IPC connection returned no remote init interface");
++                    }
++                    std::unique_ptr<interfaces::Mining> mining = node_init->makeMining();
++                    if (!mining) {
++                        throw std::runtime_error("IPC connection returned no mining interface");
++                    }
++                    LogPrintf("Connected to bitcoin-node via IPC at: %s\n", address);
++                    return {std::move(node_init), std::move(mining)};
++                } catch (const std::exception& exception) {
++                    LogPrintf("IPC connection failed: %s\n", exception.what());
++                    LogPrintf("Retrying in %d seconds... (Ensure Bitcoin Core is running with '-ipcbind=unix')\n",
++                              retry_delay.count());
++                    auto waited{0ms};
++                    while (!g_interrupt && waited < retry_delay) {
++                        std::this_thread::sleep_for(IPC_RECONNECT_POLL_INTERVAL);
++                        waited += IPC_RECONNECT_POLL_INTERVAL;
++                    }
++                    retry_delay = std::min(retry_delay * 2, IPC_RECONNECT_MAX_DELAY);
++                }
++            }
++            return {};
++        };
++
++        auto connection = connect_to_node();
++        if (g_interrupt) return EXIT_SUCCESS;
++        assert(connection.first);
++        assert(connection.second);
++        node_init = std::move(connection.first);
++        mining = std::move(connection.second);
++    }
+ 
+     auto tp = std::make_unique<Sv2TemplateProvider>(*mining);
+ 
+@@ -308,6 +352,10 @@ MAIN_FUNCTION
+             LogPrintf("Mining backend IPC connection lost: %s\n", e.what());
+             tp->BackendDisconnected();
+             break;
++        } catch (const aperture::RpcTransportError& e) {
++            LogPrintf("Mining backend RPC connection lost: %s\n", e.what());
++            tp->BackendDisconnected();
++            break;
+         }
+         UninterruptibleSleep(1s);
+     }
+diff --git a/src/sv2/messages.cpp b/src/sv2/messages.cpp
+index 9130007..61e7637 100644
+--- a/src/sv2/messages.cpp
++++ b/src/sv2/messages.cpp
+@@ -60,17 +60,17 @@ node::CoinbaseTx ExtractCoinbaseTx(const CTransactionRef coinbase_tx)
+ 
+     coinbase.sequence = coinbase_tx->vin[0].nSequence;
+ 
+-    // Extract only OP_RETURN coinbase outputs (witness commitment, merge
+-    // mining, etc). BlockAssembler::CreateNewBlock adds a dummy output with
+-    // the full reward that we must exclude.
+-    for (const auto& output : coinbase_tx->vout) {
+-        if (!output.scriptPubKey.empty() && output.scriptPubKey[0] == OP_RETURN) {
+-            coinbase.required_outputs.push_back(output);
+-        } else {
+-            // The (single) dummy coinbase output produced by CreateBlock() has
+-            // an nValue set to nFee + the Block Subsidy.
+-            Assume(coinbase.block_reward_remaining == 0);
++    // ApertureCoin: output 0 is the placeholder carrying the reward available
++    // to the miner; every further output (development fund, witness
++    // commitment) is mandatory and forwarded as coinbase_tx_outputs.
++    // Upstream kept only OP_RETURN outputs, which would drop the
++    // consensus-required development fund payment.
++    for (size_t i = 0; i < coinbase_tx->vout.size(); ++i) {
++        const auto& output{coinbase_tx->vout[i]};
++        if (i == 0) {
+             coinbase.block_reward_remaining = output.nValue;
++        } else {
++            coinbase.required_outputs.push_back(output);
+         }
+     }
+ 
+diff --git a/src/sv2/messages.h b/src/sv2/messages.h
+index 3e71359..2e576d0 100644
+--- a/src/sv2/messages.h
++++ b/src/sv2/messages.h
+@@ -743,10 +743,9 @@ public:
+ /*
+  * Extract relevant fields from the dummy coinbase transaction in the template.
+  *
+- * Extracts only OP_RETURN coinbase outputs, i.e. the witness commitment. If
+- * BlockAssembler::CreateNewBlock() is patched to add more OP_RETURN outputs
+- * e.g. for merge mining, those will be included. The dummy output that spends
+- * the full reward is excluded.
++ * ApertureCoin: output 0 is the dummy output carrying the reward available to
++ * the miner and is excluded; every further output (development fund, witness
++ * commitment) is returned as a required output.
+  */
+ node::CoinbaseTx ExtractCoinbaseTx(const CTransactionRef coinbase_tx);
+ 
