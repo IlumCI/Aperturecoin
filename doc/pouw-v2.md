@@ -10,7 +10,10 @@ Decisions already taken:
 - **Mining runs the network's own model.** The first workload is embedding
   inference; training comes in a later upgrade.
 - **The protocol model is supplied by the project.** Its architecture and
-  weights are pinned in consensus.
+  weights are pinned in consensus. Until the project's own model is ready,
+  the placeholder is Qwen3-Embedding-0.6B (Apache-2.0), converted to the
+  integer profile. The format, profile and conversion quality are in
+  `doc/protocol-model.md`.
 - **The model is at most about 1B parameters, about 1 GB in int8.** Every full
   node stores the weights.
 
@@ -57,7 +60,10 @@ Fraud proofs depend on this.
 - **Weight layers.** Weights are int8, with integer requantization between
   layers (multiplier and shift, no floating point). Accumulation is exact
   int32. Activations fed to weight matmuls are int8 with
-  |a| ≤ β = 127 − r (Variant Z headroom).
+  |a| ≤ β = 127 − r (Variant Z headroom), with **one scale per 256 input
+  channels, which is exactly one ticket K-span (g·r)**. So every ticket tile
+  is a pure int8 product within one scale group, and dequantization happens
+  after the ticket. The normative definition is in `doc/protocol-model.md`.
 - **Nonlinearities.** Integer-only: polynomial GELU, softmax and LayerNorm in
   the style of I-BERT (arXiv 2101.01321), using fixed integer square-root and
   exponent approximations. No floating-point operations anywhere in the
