@@ -69,9 +69,9 @@ workloads, with data made available. Otherwise miners multiply random
 matrices, which is the failure that
 [arXiv:2606.04819](https://arxiv.org/abs/2606.04819) documents for a deployed
 matmul-PoW network. v1 therefore uses fully pseudorandom per-nonce matrices,
-which admit no shortcut. It reserves the useful-work construction (committed
-workloads plus a KW25-style tile transcript) for a v2 hard fork, gated on
-testnet evaluation.
+which admit no shortcut. v2 (`doc/pouw-v2.md`) adds KW25 low-rank noise with one
+proof-of-work ticket per tile product, and replaces v1 before any public
+network launches.
 
 Mining notes
 ------------
