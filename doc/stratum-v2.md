@@ -26,9 +26,59 @@ Components
 |---|---|---|
 | Template Provider | Done. Upstream `sv2-tp` plus a JSON-RPC backend for ApertureCoin Core 0.21 | `contrib/sv2-tp` |
 | Reference CPU miner (solo, Template Distribution Protocol) | Done | `contrib/sv2-tp/overlay/src/aperture-sv2-miner.cpp` |
+| ApertureMatMul v2 over SV2 (useful-work extension) | Done: TP, miner, end-to-end test | `patches/0002-*`, `feature_sv2_pouw.py` |
 | End-to-end test | Done. Skipped unless `SV2TP`/`SV2MINER` are set | `test/functional/feature_sv2.py` |
 | Pool, Job Declarator and Translator proxy (SRI `sv2-apps`) | Not started | Planned fork |
 | GPU miner | Not started | Planned |
+
+ApertureMatMul v2: the useful-work extension
+--------------------------------------------
+
+A v2 header carries a batch_root, a ticket and the ticket's activation panel
+(`doc/pouw-v2.md`), and the miner needs the block's embedding requests to run
+the protocol model. The standard Template Distribution messages carry neither.
+ApertureCoin defines them as an SV2 **extension**:
+- `extension_type = 0x4150` ("AP") in the frame header.
+- Message types are scoped to the extension, so they cannot collide with
+  standard messages.
+- Clients that do not implement the extension never receive or send these
+  messages for v1 templates.
+
+| Type | Direction | Payload (little-endian) |
+|---|---|---|
+| `0x01` UsefulWorkTemplate | TP → client, right after `NewTemplate` of a v2 template | `template_id:u64` `batch_root[32]` `model_id[32]` `rank:u8` `request_count:u16` then per request `token_count:u16` `token_id:u24…` |
+| `0x02` SubmitUsefulWorkSolution | client → TP, instead of `SubmitSolution` | `template_id:u64` `version:u32` `timestamp:u32` `nonce:u32` `op:u16` `tile_i:u16` `tile_j:u16` `span_s:u16` `panel_len:u16` `panel[panel_len]` `coinbase_len:u32` `coinbase` (with witness) |
+
+The flow:
+1. **Node.** `apertured` runs the forward pass while it builds the template.
+   Its coinbase results (`OP_RETURN "APEM"…`) are **mandatory coinbase
+   outputs** in `NewTemplate`, like the development fund. `getblocktemplate`
+   exposes the batch as `powv2 {batch_root, model_id, rank, requests,
+   results}`.
+2. **Miner.** It loads the protocol model itself, with `-protocolmodel=<file.apm>`
+   or `-tinymodel` on regtest, and checks its model id against the template.
+   It runs the forward pass over the requests (the useful work) and searches
+   tickets over its own activations with the pinned weights. On a win it
+   sends `SubmitUsefulWorkSolution`.
+3. **Template Provider.** `sv2-tp` rebuilds the block and inserts the v2
+   header extension after the 80 v1 bytes, then calls `submitblock`.
+
+Upstream changes (`patches/0002-aperture-useful-work-extension.patch`):
+- `extension_type` plumbing in `Sv2NetHeader`/`Sv2NetMsg`/transport. The
+  internal wrapping format is unchanged, so the upstream `test_sv2` suite
+  passes.
+- An `ExtensionMessage` hook in `Sv2Connman`.
+- `BlockTemplate::apertureUsefulWork()` and `apertureSubmitUsefulWork()`,
+  whose defaults are no-ops.
+- Sending and receiving in `Sv2TemplateProvider`.
+
+The template provider only forwards opaque payloads. All ApertureCoin
+encoding lives in `overlay/src/aperture/rpc_mining.cpp`.
+
+**Pools.** An SRI pool or Job Declarator must forward the extension payloads
+to its downstream miners, and must validate shares as v2 tickets, which needs
+the protocol-model weights. The work described under "Porting the SRI pool"
+applies unchanged, plus this extension.
 
 Porting the SRI pool
 --------------------

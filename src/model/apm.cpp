@@ -7,8 +7,8 @@
 #include <crypto/blake3/blake3.h>
 #include <crypto/common.h>
 #include <univalue.h>
-#include <util/strencodings.h>
 
+#include <cstring>
 #include <fstream>
 #include <iterator>
 
@@ -37,7 +37,13 @@ std::string Blake3Hex(const unsigned char* data, size_t len)
     blake3_hasher_update(&h, data, len);
     unsigned char out[32];
     blake3_hasher_finalize(&h, out, 32);
-    return HexStr(Span<const unsigned char>(out, 32));
+    static const char* const DIGITS = "0123456789abcdef";
+    std::string hex;
+    for (unsigned char b : out) {
+        hex.push_back(DIGITS[b >> 4]);
+        hex.push_back(DIGITS[b & 15]);
+    }
+    return hex;
 }
 
 int64_t Tensor::i64(uint64_t k) const { return static_cast<int64_t>(ReadLE64(data + 8 * k)); }
@@ -118,8 +124,9 @@ bool Model::Load(std::vector<unsigned char> bytes, std::string& error)
     }
     m_weights_root_hex = Blake3Hex(m_bytes.data(), m_bytes.size());
     std::vector<unsigned char> id_pre{'A', 'p', 'e', 'r', 't', 'u', 'r', 'e', 'M', 'o', 'd', 'e', 'l', '/', 'v', '0'};
-    const std::vector<unsigned char> root = ParseHex(m_weights_root_hex);
-    id_pre.insert(id_pre.end(), root.begin(), root.end());
+    for (size_t k = 0; k + 1 < m_weights_root_hex.size(); k += 2) {
+        id_pre.push_back(static_cast<unsigned char>(std::stoi(m_weights_root_hex.substr(k, 2), nullptr, 16)));
+    }
     m_model_id_hex = Blake3Hex(id_pre.data(), id_pre.size());
     return true;
 }

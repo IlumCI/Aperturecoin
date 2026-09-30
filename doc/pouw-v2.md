@@ -335,6 +335,13 @@ Implementation status
   `searchembeddings`, and `getblockheader.powv2` including `pow_hash`.
 - `-protocolmodel=<file.apm>` loads another model. Regtest accepts any model
   file.
+- **External mining over Stratum V2.**
+  - `getblocktemplate` exposes `powv2`.
+  - The SV2 useful-work extension (`doc/stratum-v2.md`) carries the batch and
+    the solutions.
+  - `aperture-sv2-miner` runs the model and mines tickets over its own
+    activations.
+  - Tested end to end by `feature_sv2_pouw.py`.
 - **Tests.**
   - `protocolmodel_tests`: golden vectors shared with Python;
     decode(noisy) = clean; ticket tile = tile of the noisy product.
@@ -350,7 +357,6 @@ Implementation status
 
 **Not yet:**
 - the fraud-proof game and maturing request fees;
-- external mining over Stratum V2 (`getblocktemplate` refuses v2 templates);
 - optimized CPU and GPU kernels;
 - mainnet and testnet parameters;
 - trimming the panel from the in-memory block index (the Zcash-style
@@ -373,7 +379,7 @@ Implementation plan
      challenge and response transactions.
 4. **Mining.**
    - A regtest in-node miner running a tiny test model.
-   - SV2 extensions.
+   - SV2 extensions (done: useful-work extension 0x4150).
    - GPU kernels: CUTLASS-style IMMA and HIP MFMA with a span-boundary
      epilogue, plus CPU VNNI/AMX.
 5. **Tests.**

@@ -12,6 +12,7 @@
 #include <core_io.h>
 #include <key_io.h>
 #include <miner.h>
+#include <model/embed.h>
 #include <net.h>
 #include <node/context.h>
 #include <policy/fees.h>
@@ -596,6 +597,16 @@ static RPCHelpMan getblocktemplate()
                             {RPCResult::Type::STR_HEX, "script", "scriptPubKey the coinbase must pay"},
                             {RPCResult::Type::NUM, "amount", "minimum amount in satoshis"},
                         }},
+                        {RPCResult::Type::OBJ, "powv2", /* optional */ true, "ApertureMatMul v2 work (doc/pouw-v2.md, doc/stratum-v2.md)",
+                        {
+                            {RPCResult::Type::STR_HEX, "batch_root", "header batch_root, raw byte order"},
+                            {RPCResult::Type::STR_HEX, "model_id", "protocol model id"},
+                            {RPCResult::Type::NUM, "rank", "ticket tile size r"},
+                            {RPCResult::Type::ARR, "requests", "token ids of every embedding request, in block order (EOS not included)",
+                                {{RPCResult::Type::ARR, "", "", {{RPCResult::Type::NUM, "", "token id"}}}}},
+                            {RPCResult::Type::ARR, "results", "coinbase result outputs (value 0) the coinbase must contain, in order",
+                                {{RPCResult::Type::STR_HEX, "", "scriptPubKey"}}},
+                        }},
                         {RPCResult::Type::STR, "longpollid", "an id to include with a request to longpoll on an update to this template"},
                         {RPCResult::Type::STR, "target", "The hash target"},
                         {RPCResult::Type::NUM_TIME, "mintime", "The minimum timestamp appropriate for the next block time, expressed in " + UNIX_EPOCH_TIME},
@@ -780,9 +791,6 @@ static RPCHelpMan getblocktemplate()
     CHECK_NONFATAL(pindexPrev);
     CBlock* pblock = &pblocktemplate->block; // pointer for convenience
     const Consensus::Params& consensusParams = Params().GetConsensus();
-    if (pblock->IsPowV2()) {
-        throw JSONRPCError(RPC_MISC_ERROR, "ApertureMatMul v2 templates need the block's forward-pass trace; use the in-node miner (external v2 mining over Stratum V2 is not implemented yet)");
-    }
 
     // Update nTime
     UpdateTime(pblock, consensusParams, pindexPrev);
@@ -910,6 +918,27 @@ static RPCHelpMan getblocktemplate()
         devfund.pushKV("script", HexStr(consensusParams.devFundScript));
         devfund.pushKV("amount", (int64_t)nDevFund);
         result.pushKV("devfund", devfund);
+    }
+    if (pblock->IsPowV2()) {
+        const intmodel::IntModel* model = embed::GetProtocolModel();
+        UniValue v2(UniValue::VOBJ);
+        v2.pushKV("batch_root", HexStr(pblock->powv2.batch_root));
+        v2.pushKV("model_id", model ? model->Apm().ModelIdHex() : "");
+        v2.pushKV("rank", (int)consensusParams.nPowV2Rank);
+        UniValue requests(UniValue::VARR);
+        for (const embed::Request& r : embed::CollectRequests(*pblock)) {
+            UniValue ids(UniValue::VARR);
+            for (uint32_t id : r.ids) ids.push_back((int64_t)id);
+            requests.push_back(ids);
+        }
+        v2.pushKV("requests", requests);
+        UniValue results(UniValue::VARR);
+        for (const CTxOut& out : pblock->vtx[0]->vout) {
+            embed::Result r;
+            if (embed::ParseResult(out.scriptPubKey, r)) results.push_back(HexStr(out.scriptPubKey));
+        }
+        v2.pushKV("results", results);
+        result.pushKV("powv2", v2);
     }
     result.pushKV("longpollid", ::ChainActive().Tip()->GetBlockHash().GetHex() + ToString(nTransactionsUpdatedLast));
     result.pushKV("target", hashTarget.GetHex());

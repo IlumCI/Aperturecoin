@@ -11,10 +11,19 @@
 // The miner chooses its own coinbase; the transaction set comes from the
 // miner's own node through its own TP. That is the decentralization property
 // Stratum V2 provides.
+//
+// ApertureMatMul v2 (doc/pouw-v2.md): for v2 templates the Template Provider
+// also sends the block's embedding requests (extension 0x4150). The miner runs
+// the protocol model's forward pass over them itself, searches PoW tickets over
+// the resulting activations with the pinned weights, and submits the ticket
+// with SubmitUsefulWorkSolution.
 
 #include <arith_uint256.h>
 #include <base58.h>
 #include <crypto/matmulpow.h>
+#include <crypto/matmulpow_v2.h>
+#include <model/apm.h>
+#include <model/intmodel.h>
 #include <crypto/sha256.h>
 #include <hash.h>
 #include <key.h>
@@ -35,6 +44,7 @@
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -57,6 +67,16 @@ struct Options {
     unsigned int dim{512};
     unsigned int threads{std::max(1u, std::thread::hardware_concurrency())};
     int max_blocks{-1};
+    std::string model_path;   //!< -protocolmodel=<file.apm>
+    bool tiny_model{false};   //!< -tinymodel: built-in regtest model
+};
+
+/** Useful work of a v2 template, with the miner's own forward-pass trace. */
+struct UsefulWork {
+    std::vector<unsigned char> batch_root, model_id;
+    unsigned int rank{0};
+    std::vector<std::vector<uint32_t>> requests;
+    std::vector<intmodel::OpTrace> trace;
 };
 
 struct Template {
@@ -70,7 +90,11 @@ struct Template {
     std::vector<CTxOut> outputs;
     uint32_t locktime{0};
     std::vector<uint256> merkle_path;
+    std::shared_ptr<const UsefulWork> useful; //!< set for v2 templates once announced
 };
+
+constexpr uint32_t VERSION_POWV2{1 << 8};
+std::unique_ptr<intmodel::IntModel> g_model;
 
 struct Job {
     uint64_t generation{0};
@@ -253,6 +277,146 @@ uint256 MerkleRoot(const CMutableTransaction& coinbase, const std::vector<uint25
     return root;
 }
 
+/** Serialize and send SubmitUsefulWorkSolution (extension 0x4150, type 0x02). */
+void SubmitV2(Connection& conn, const Job& job, const CBlockHeader& header, const matmulpow_v2::Ticket& t,
+              const std::vector<int8_t>& panel, const CMutableTransaction& coinbase)
+{
+    std::vector<uint8_t> msg;
+    VectorWriter w{msg, 0};
+    w << job.tmpl.id << job.tmpl.version << header.nTime << header.nNonce << t.op << t.i << t.j << t.s
+      << static_cast<uint16_t>(panel.size());
+    w.write(std::as_bytes(std::span{panel}));
+    std::vector<uint8_t> cb_bytes;
+    VectorWriter{cb_bytes, 0, TX_WITH_WITNESS(coinbase)};
+    w << static_cast<uint32_t>(cb_bytes.size());
+    w.write(MakeByteSpan(cb_bytes));
+    conn.Send(node::Sv2NetMsg{static_cast<node::Sv2MsgType>(node::APERTURE_SUBMIT_USEFUL_WORK), std::move(msg), node::SV2_EXT_APERTURE});
+}
+
+/**
+ * ApertureMatMul v2: every r x r output tile of every weight matmul of the
+ * forward pass over the block's requests is a lottery ticket; a new nonce
+ * reseeds the noise (same search as the node's SolvePowV2).
+ */
+void MineV2(Connection& conn, const Options& opt, const Job& job, const CMutableTransaction& coinbase)
+{
+    const UsefulWork& uw{*job.tmpl.useful};
+    const std::vector<matmulpow_v2::Op>& ops{g_model->Ops()};
+    const unsigned int r{uw.rank}, G{matmulpow_v2::GROUP};
+    CBlockHeader header;
+    header.nVersion = static_cast<int32_t>(job.tmpl.version);
+    header.hashPrevBlock = job.prev_hash;
+    header.hashMerkleRoot = MerkleRoot(coinbase, job.tmpl.merkle_path);
+    header.nTime = std::max<uint32_t>(job.ntime, static_cast<uint32_t>(time(nullptr)));
+    header.nBits = job.nbits;
+    std::vector<int8_t> panel(r * G);
+    for (uint32_t nonce = 0; nonce < 0xffffffff && !g_stop; ++nonce) {
+        if (g_generation.load() != job.generation) return;
+        header.nNonce = nonce;
+        std::vector<unsigned char> seed_input;
+        VectorWriter{seed_input, 0, header};
+        seed_input.insert(seed_input.end(), uw.batch_root.begin(), uw.batch_root.end());
+        unsigned char sigma[32];
+        matmulpow_v2::Seed(seed_input.data(), seed_input.size(), sigma);
+        for (const intmodel::OpTrace& tr : uw.trace) {
+            const matmulpow_v2::Op& od{ops.at(tr.op)};
+            const unsigned int tiles_i{(tr.rows + r - 1) / r}, tiles_j{od.d_out / r}, spans{od.d_in / G};
+            for (unsigned int i = 0; i < tiles_i; ++i) {
+                for (unsigned int s = 0; s < spans; ++s) {
+                    for (unsigned int x = 0; x < r; ++x) {
+                        const unsigned int row{i * r + x};
+                        for (unsigned int k = 0; k < G; ++k) {
+                            panel[x * G + k] = row < tr.rows ? tr.q[static_cast<size_t>(row) * od.d_in + s * G + k] : 0;
+                        }
+                    }
+                    for (unsigned int j = 0; j < tiles_j; ++j) {
+                        matmulpow_v2::Ticket t;
+                        t.op = tr.op;
+                        t.i = static_cast<uint16_t>(i);
+                        t.j = static_cast<uint16_t>(j);
+                        t.s = static_cast<uint16_t>(s);
+                        unsigned char pow[32];
+                        if (!matmulpow_v2::TicketPoW(sigma, r, od, t, panel.data(), pow)) continue;
+                        ++g_hashes;
+                        if (UintToArith256(uint256{std::span<const unsigned char>{pow, 32}}) > job.target) continue;
+                        uint64_t solved{g_solved_generation.load()};
+                        if (solved >= job.generation || !g_solved_generation.compare_exchange_strong(solved, job.generation)) return;
+                        SubmitV2(conn, job, header, t, panel, coinbase);
+                        const int found{++g_found};
+                        std::cout << "found useful-work block: template " << job.tmpl.id << " ticket op=" << t.op << " i=" << t.i
+                                  << " j=" << t.j << " s=" << t.s << " (" << found << " total)" << std::endl;
+                        if (opt.max_blocks > 0 && found >= opt.max_blocks) g_stop = true;
+                        while (!g_stop && g_generation.load() == job.generation) std::this_thread::sleep_for(std::chrono::milliseconds{10});
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Parse UsefulWorkTemplate and run the protocol model over its requests. */
+std::optional<std::pair<uint64_t, std::shared_ptr<const UsefulWork>>> ParseUsefulWork(const std::vector<uint8_t>& payload)
+{
+    if (!g_model) {
+        std::cerr << "v2 template received but no protocol model loaded (use -protocolmodel or -tinymodel)\n";
+        return std::nullopt;
+    }
+    auto uw{std::make_shared<UsefulWork>()};
+    uint64_t template_id;
+    SpanReader r{payload};
+    uw->batch_root.resize(32);
+    uw->model_id.resize(32);
+    uint8_t rank;
+    uint16_t count;
+    r >> template_id;
+    r.read(MakeWritableByteSpan(uw->batch_root));
+    r.read(MakeWritableByteSpan(uw->model_id));
+    r >> rank >> count;
+    uw->rank = rank;
+    for (uint16_t k = 0; k < count; ++k) {
+        uint16_t n;
+        r >> n;
+        std::vector<uint32_t> ids(n);
+        for (auto& id : ids) {
+            uint8_t b[3];
+            r >> b[0] >> b[1] >> b[2];
+            id = b[0] | (b[1] << 8) | (uint32_t{b[2]} << 16);
+        }
+        uw->requests.push_back(std::move(ids));
+    }
+    if (HexStr(uw->model_id) != g_model->Apm().ModelIdHex()) {
+        std::cerr << "template model " << HexStr(uw->model_id) << " differs from the loaded model " << g_model->Apm().ModelIdHex() << "\n";
+        return std::nullopt;
+    }
+    matmulpow_v2::SetModel(g_model->Ops(), uw->rank);
+    // Forward pass over every request (the useful work); an empty batch runs EOS only.
+    auto merge = [&](std::vector<intmodel::OpTrace>& part) {
+        if (uw->trace.empty()) {
+            uw->trace = std::move(part);
+            return;
+        }
+        for (size_t k = 0; k < uw->trace.size(); ++k) {
+            uw->trace[k].q.insert(uw->trace[k].q.end(), part[k].q.begin(), part[k].q.end());
+            uw->trace[k].rows += part[k].rows;
+        }
+    };
+    std::vector<std::vector<uint32_t>> inputs{uw->requests};
+    if (inputs.empty()) inputs.emplace_back();
+    for (auto ids : inputs) {
+        ids.push_back(g_model->Config().eos_token_id);
+        std::vector<intmodel::OpTrace> part;
+        if (g_model->Embed(ids, &part).empty()) {
+            std::cerr << "template request cannot be embedded\n";
+            return std::nullopt;
+        }
+        merge(part);
+    }
+    std::cout << "useful work for template " << template_id << ": " << uw->requests.size() << " embedding requests, "
+              << uw->trace.size() << " weight matmuls" << std::endl;
+    return std::make_pair(template_id, std::shared_ptr<const UsefulWork>{uw});
+}
+
 void Mine(Connection& conn, const Options& opt, unsigned int thread_id)
 {
     uint64_t extranonce{(static_cast<uint64_t>(thread_id) << 48) ^ FastRandomContext().rand64()};
@@ -267,6 +431,14 @@ void Mine(Connection& conn, const Options& opt, unsigned int thread_id)
             continue;
         }
         const CMutableTransaction coinbase{BuildCoinbase(job->tmpl, opt.payout, ++extranonce)};
+        if (job->tmpl.version & VERSION_POWV2) {
+            if (!job->tmpl.useful) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{20});
+                continue;
+            }
+            MineV2(conn, opt, *job, coinbase);
+            continue;
+        }
         CBlockHeader header;
         header.nVersion = static_cast<int32_t>(job->tmpl.version);
         header.hashPrevBlock = job->prev_hash;
@@ -310,7 +482,8 @@ void Usage()
     std::cerr << "usage: aperture-sv2-miner -connect=<host:port> -authority=<base58 key> [-payout=<scriptPubKey hex>]\n"
                  "                          [-dim=<n>] [-threads=<n>] [-blocks=<n>]\n"
                  "  -dim      ApertureMatMul matrix dimension: 512 (main/test), 32 (regtest)\n"
-                 "  -payout   scriptPubKey for the reward (default: OP_TRUE, for testing only)\n";
+                 "  -payout   scriptPubKey for the reward (default: OP_TRUE, for testing only)\n"
+                 "  -protocolmodel=<file.apm> / -tinymodel   protocol model for ApertureMatMul v2 templates\n";
 }
 
 } // namespace
@@ -340,6 +513,10 @@ int main(int argc, char** argv)
             opt.threads = static_cast<unsigned int>(std::stoul(val));
         } else if (key == "-blocks") {
             opt.max_blocks = std::stoi(val);
+        } else if (key == "-protocolmodel") {
+            opt.model_path = val;
+        } else if (key == "-tinymodel") {
+            opt.tiny_model = true;
         } else {
             Usage();
             return 1;
@@ -351,6 +528,19 @@ int main(int argc, char** argv)
         return 1;
     }
     const XOnlyPubKey authority{std::span<const unsigned char>{authority_bytes}.subspan(2)};
+
+    if (!opt.model_path.empty() || opt.tiny_model) {
+        auto apm_model{std::make_unique<apm::Model>()};
+        std::string error;
+        const bool loaded{opt.model_path.empty() ? apm_model->Load(intmodel::BuildTinyModel(1), error)
+                                                 : apm_model->LoadFile(opt.model_path, error)};
+        g_model = std::make_unique<intmodel::IntModel>();
+        if (!loaded || !g_model->Init(std::move(apm_model), error)) {
+            std::cerr << "cannot load protocol model: " << error << "\n";
+            return 1;
+        }
+        std::cout << "protocol model " << g_model->Apm().ModelIdHex() << std::endl;
+    }
 
     const int fd{Connect(opt)};
     if (fd < 0) {
@@ -392,6 +582,19 @@ int main(int argc, char** argv)
             break;
         }
         std::vector<uint8_t> payload{msg->m_msg};
+        if (msg->m_extension_type == node::SV2_EXT_APERTURE) {
+            if (uint8_t(msg->m_msg_type) != node::APERTURE_USEFUL_WORK_TEMPLATE) continue;
+            const auto uw{ParseUsefulWork(payload)};
+            if (!uw) continue;
+            auto it{templates.find(uw->first)};
+            if (it != templates.end()) it->second.useful = uw->second;
+            std::lock_guard<std::mutex> lock(g_job_mutex);
+            if (g_job && g_job->tmpl.id == uw->first) {
+                g_job->tmpl.useful = uw->second;
+                g_job->generation = ++g_generation;
+            }
+            continue;
+        }
         switch (msg->m_msg_type) {
         case node::Sv2MsgType::SETUP_CONNECTION_SUCCESS:
             std::cout << "connected to template provider" << std::endl;

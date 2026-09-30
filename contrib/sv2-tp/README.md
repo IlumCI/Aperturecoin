@@ -48,7 +48,10 @@ Run
    aperture-sv2-miner -connect=127.0.0.1:8442 -authority=<base58> \
        -payout=<your scriptPubKey hex> -dim=512 -threads=$(nproc)
    ```
-   Use `-dim=32` on regtest.
+   Use `-dim=32` on regtest. For ApertureMatMul v2 templates add the protocol
+   model, `-protocolmodel=<file.apm>` (regtest: `-tinymodel`). The miner then
+   runs the model over each template's embedding requests and mines tickets
+   over its own activations (see `doc/stratum-v2.md`, useful-work extension).
 
 For pooled mining, point the SRI Job Declarator Client or Pool at `sv2-tp`
 the same way. The SRI pool and proxy roles also need ApertureMatMul share
@@ -68,6 +71,11 @@ Changes relative to upstream
   `OP_RETURN` outputs, which would have dropped the consensus-required
   development fund payment.
 - **`aperture-sv2-miner`.** A reference CPU miner (new file).
+- **Useful-work extension (`0002`).** The SV2 `extension_type` 0x4150 carries
+  the v2 request batch (TP to miner) and v2 solutions (miner to TP). The miner
+  compiles `src/crypto/matmulpow_v2.cpp` and `src/model/{apm,intmodel}.cpp`
+  from this repository, so its tickets and forward pass are bit-exact with
+  the node.
 
 Tests
 -----
@@ -79,5 +87,8 @@ Tests
   2. Start `sv2-tp -regtest -rpccookiefile=...`.
   3. Run `aperture-sv2-miner -dim=32 -blocks=5`.
 
-  The node's height advances by 5. Each coinbase pays the miner's payout
+  The node's height advances by 5.
+- `feature_sv2_pouw.py` (same `SV2TP`/`SV2MINER` variables): mining v2 blocks
+  over SV2 with pending embedding requests, served bit-identically by the
+  external miner's blocks. Each coinbase pays the miner's payout
   output, 0.75 SCIENCE to the development fund, and the witness commitment.

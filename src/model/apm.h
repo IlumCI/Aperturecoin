@@ -5,8 +5,6 @@
 #ifndef BITCOIN_MODEL_APM_H
 #define BITCOIN_MODEL_APM_H
 
-#include <uint256.h>
-
 #include <stdint.h>
 
 #include <map>
