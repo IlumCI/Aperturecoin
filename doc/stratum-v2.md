@@ -92,7 +92,9 @@ its messages carry only header fields. The fork changes four things:
 
 1. **Share and block validation.** ApertureMatMul v1 replaces SHA256d in
    `channels_sv2` (standard and extended channels, server and client), in the
-   translator's SV1 share check and in the CPU mining device. It comes from
+   translator's SV1 share check and in the CPU mining device. The fork adds
+   `aperture-sv1-miner`, a multithreaded Stratum V1 CPU miner, as the SV1
+   client for the translator. It comes from
    the `aperture_pow` crate, a bit-exact port of `src/crypto/matmulpow.cpp`
    that is tested against `src/test/matmulpow_tests.cpp`'s vectors. The
    block *identifier* reported in `BlockFound` stays SHA256d. `channels_sv2`
@@ -123,11 +125,22 @@ things:
 - that hash meets a 16-bit share target, which SHA256d of the header does not
   meet.
 
+With `SRI_TRANSLATOR` and `APERTURE_SV1_MINER` set, a second phase mines
+`aperture-sv1-miner` -> translator -> pool, and checks three things:
+
+- the pooled blocks are accepted, with the same checks as above;
+- every accepted SV1 share header hashes to the reported ApertureMatMul value;
+- some accepted shares miss the share target under SHA256d, so the
+  translator validates ApertureMatMul. In test runs, every accepted share missed at a
+  share target of about 2^-11 of the hash space.
+
 ```sh
 contrib/sri-pool/build.sh
 SV2TP=contrib/sv2-tp/work/build/bin/sv2-tp \
 SRI_POOL=contrib/sri-pool/work/sv2-apps/target/release/pool_sv2 \
 SRI_MINING_DEVICE=contrib/sri-pool/work/sv2-apps/target/release/mining_device \
+SRI_TRANSLATOR=contrib/sri-pool/work/sv2-apps/target/release/translator_sv2 \
+APERTURE_SV1_MINER=contrib/sri-pool/work/sv2-apps/target/release/aperture-sv1-miner \
     test/functional/feature_sri_pool.py
 ```
 

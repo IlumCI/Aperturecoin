@@ -10,8 +10,9 @@ patch series against the pinned upstream commits in `UPSTREAM_COMMITS`:
   - ApertureCoin addresses in `addr()` and payout identities;
   - the pool's `aperture_pow_dim` key;
   - translator and mining-device hashing;
+  - `aperture-sv1-miner`, the Stratum V1 CPU miner used with the translator;
   - the `[patch]` that swaps in the patched `channels_sv2`;
-  - config examples and `aperture/README.md`.
+  - pool and translator config examples, and `aperture/README.md`.
 - `patches/0002-channels-sv2-aperture.patch`: applied to a copy of
   `sv2/channels-sv2` from stratum-mining/stratum. Share and block validation
   use the ApertureMatMul hash, and `BlockFound` keeps the SHA256d block id.

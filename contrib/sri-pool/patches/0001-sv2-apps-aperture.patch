@@ -1,8 +1,8 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index e78173c9..6386f161 100644
+index e78173c9..d66fa7b8 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -141,6 +141,13 @@ version = "1.0.102"
+@@ -141,6 +141,22 @@ version = "1.0.102"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
  
@@ -13,10 +13,19 @@ index e78173c9..6386f161 100644
 + "blake3",
 +]
 +
++[[package]]
++name = "aperture_sv1_miner"
++version = "0.1.0"
++dependencies = [
++ "aperture_pow",
++ "serde_json",
++ "sha2 0.10.9",
++]
++
  [[package]]
  name = "arbitrary"
  version = "1.4.2"
-@@ -1173,6 +1180,19 @@ dependencies = [
+@@ -1173,6 +1189,19 @@ dependencies = [
   "wyz",
  ]
  
@@ -36,7 +45,7 @@ index e78173c9..6386f161 100644
  [[package]]
  name = "block-buffer"
  version = "0.9.0"
-@@ -1362,8 +1382,8 @@ dependencies = [
+@@ -1362,8 +1391,8 @@ dependencies = [
  [[package]]
  name = "channels_sv2"
  version = "8.0.0"
@@ -46,7 +55,7 @@ index e78173c9..6386f161 100644
   "binary_sv2",
   "bitcoin",
   "mining_sv2",
-@@ -1609,6 +1629,12 @@ dependencies = [
+@@ -1609,6 +1638,12 @@ dependencies = [
   "unicode-xid",
  ]
  
@@ -59,7 +68,7 @@ index e78173c9..6386f161 100644
  [[package]]
  name = "convert_case"
  version = "0.6.0"
-@@ -3552,6 +3578,7 @@ dependencies = [
+@@ -3552,6 +3587,7 @@ dependencies = [
  name = "pool_sv2"
  version = "0.7.1"
  dependencies = [
@@ -68,26 +77,28 @@ index e78173c9..6386f161 100644
   "clap",
   "hex",
 diff --git a/Cargo.toml b/Cargo.toml
-index 180dcaea..d34544d3 100644
+index 180dcaea..84a9be78 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -2,6 +2,7 @@
+@@ -2,6 +2,8 @@
  resolver = "3"
  
  members = [
 +    "aperture/aperture-pow",
++    "aperture/aperture-sv1-miner",
      "bitcoin-core-sv2",
      "stratum-apps",
      "pool-apps/pool",
-@@ -15,6 +16,7 @@ members = [
+@@ -15,6 +17,8 @@ members = [
  # they are run explicitly with `-p integration_tests_sv2` rather than being
  # picked up by a bare `cargo build`/`cargo test` at the repository root.
  default-members = [
 +    "aperture/aperture-pow",
++    "aperture/aperture-sv1-miner",
      "bitcoin-core-sv2",
      "stratum-apps",
      "pool-apps/pool",
-@@ -22,3 +24,9 @@ default-members = [
+@@ -22,3 +26,9 @@ default-members = [
      "miner-apps/jd-client",
      "miner-apps/translator",
  ]
@@ -113,10 +124,10 @@ index 0a0c5469..98b92c6d 100644
  This repository contains the application-level crates, currently in **alpha** stage.
 diff --git a/aperture/README.md b/aperture/README.md
 new file mode 100644
-index 00000000..741d019d
+index 00000000..2bc4a62f
 --- /dev/null
 +++ b/aperture/README.md
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,93 @@
 +# ApertureCoin fork of the SRI applications
 +
 +This fork of [stratum-mining/sv2-apps](https://github.com/stratum-mining/sv2-apps)
@@ -150,9 +161,13 @@ index 00000000..741d019d
 +- `stratum-apps/src/config_helpers/coinbase_output/aperture.rs`: ApertureCoin
 +  address decoding.
 +- `miner-apps/translator/src/lib/utils.rs`: SV1 share validation.
++- `aperture/aperture-sv1-miner/`: `aperture-sv1-miner`, a multithreaded
++  Stratum V1 CPU miner for ApertureMatMul. It is the SV1 client for the
++  translator:
++  `aperture-sv1-miner --url <tproxy>:34255 --user <name> --threads N [--dim 32]`.
 +- `integration-tests/lib/mining_device/mod.rs`: the CPU mining device hashes
 +  ApertureMatMul. The SHA256d midstate fast path is disabled.
-+- `aperture/config-examples/`: pool configurations.
++- `aperture/config-examples/`: pool and translator configurations.
 +
 +## Matrix dimension
 +
@@ -168,20 +183,32 @@ index 00000000..741d019d
 +```sh
 +cargo build --release -p pool_sv2 -p jd_server_sv2 -p jd_client_sv2 -p translator_sv2 --bins
 +cargo build --release -p integration_tests_sv2 --bin mining_device
-+cargo test --release -p aperture_pow -p channels_sv2 -p stratum-apps --all-features
++cargo build --release -p aperture_sv1_miner
++cargo test --release -p aperture_pow -p aperture_sv1_miner -p channels_sv2 -p stratum-apps --all-features
 +```
 +
 +The end-to-end test lives in the ApertureCoin repository. It runs apertured
 +(regtest, dev fund enforced), sv2-tp, this pool and this mining device. It
 +checks that the pooled blocks are accepted and pay the pool through an
 +`rsci1` address, and that they keep the dev-fund output. It also checks that
-+every accepted share is the ApertureMatMul hash of the block header:
++every accepted share is the ApertureMatMul hash of the block header.
++A second phase covers Stratum V1:
++`aperture-sv1-miner` -> translator -> pool. The translator accepts shares
++whose SHA256d misses the share target, so it is validating ApertureMatMul.
 +
 +```sh
 +SV2TP=<sv2-tp> SRI_POOL=target/release/pool_sv2 \
 +SRI_MINING_DEVICE=target/release/mining_device \
++SRI_TRANSLATOR=target/release/translator_sv2 \
++APERTURE_SV1_MINER=target/release/aperture-sv1-miner \
 +    <aperturecoin>/test/functional/feature_sri_pool.py
 +```
++
++Translator config for ApertureCoin: the upstream examples work unchanged.
++Set `APERTURE_POW_DIM` (or `APERTURE_NETWORK`) in the translator's
++environment on regtest, and size `min_individual_miner_hashrate` to
++ApertureMatMul CPU rates. A CPU core does about 50k H/s at n = 32; at
++n = 512 it is far lower.
 +
 +## Not yet covered
 +
@@ -194,8 +221,6 @@ index 00000000..741d019d
 +
 +  Until that exists, v2 blocks are mined solo against sv2-tp with
 +  `aperture-sv2-miner`.
-+- The translator has no SV1 ApertureMatMul miner to test against. Its share
-+  check uses the same `pow_block_hash` as the pool.
 diff --git a/aperture/aperture-pow/Cargo.toml b/aperture/aperture-pow/Cargo.toml
 new file mode 100644
 index 00000000..c0cb30dd
@@ -367,6 +392,539 @@ index 00000000..db3e1721
 +        assert!(is_valid_dim(32) && is_valid_dim(512) && !is_valid_dim(8) && !is_valid_dim(520));
 +    }
 +}
+diff --git a/aperture/aperture-sv1-miner/Cargo.toml b/aperture/aperture-sv1-miner/Cargo.toml
+new file mode 100644
+index 00000000..fa707c44
+--- /dev/null
++++ b/aperture/aperture-sv1-miner/Cargo.toml
+@@ -0,0 +1,15 @@
++[package]
++name = "aperture_sv1_miner"
++version = "0.1.0"
++edition = "2021"
++description = "Stratum V1 CPU miner for ApertureCoin (ApertureMatMul v1), for the SRI translator"
++license = "MIT OR Apache-2.0"
++
++[[bin]]
++name = "aperture-sv1-miner"
++path = "src/main.rs"
++
++[dependencies]
++aperture_pow = { path = "../aperture-pow" }
++serde_json = "1"
++sha2 = "0.10"
+diff --git a/aperture/aperture-sv1-miner/src/main.rs b/aperture/aperture-sv1-miner/src/main.rs
+new file mode 100644
+index 00000000..3b3c2ac1
+--- /dev/null
++++ b/aperture/aperture-sv1-miner/src/main.rs
+@@ -0,0 +1,506 @@
++//! Stratum V1 CPU miner for ApertureCoin (ApertureMatMul v1).
++//!
++//! Connects to an SV1 endpoint, normally the SRI translator (tProxy) of this
++//! fork, and mines with the ApertureMatMul proof of work from `aperture_pow`.
++//! Job handling (coinbase = coinb1 || extranonce1 || extranonce2 || coinb2,
++//! SHA256d merkle root, word-swapped prevhash, diff1 = 0xffff << 208) is the
++//! same as for any SV1 miner. Only the header hash differs.
++//!
++//! ```text
++//! aperture-sv1-miner --url 127.0.0.1:34255 --user worker [--pass x]
++//!                    [--threads N] [--dim 512|32] [--shares N]
++//! ```
++//!
++//! Every accepted share is printed as
++//! `accepted job=<id> header=<80-byte hex> pow=<hash hex, raw byte order>`.
++
++use serde_json::{json, Value};
++use sha2::{Digest, Sha256};
++use std::{
++    collections::HashMap,
++    io::{BufRead, BufReader, Write},
++    net::TcpStream,
++    sync::{
++        atomic::{AtomicBool, AtomicU64, Ordering},
++        mpsc, Arc, Mutex,
++    },
++    thread,
++};
++
++fn sha256d(data: &[u8]) -> [u8; 32] {
++    let first = Sha256::digest(data);
++    Sha256::digest(first).into()
++}
++
++fn hex(b: &[u8]) -> String {
++    b.iter().map(|x| format!("{x:02x}")).collect()
++}
++
++fn unhex(s: &str) -> Result<Vec<u8>, String> {
++    if s.len() % 2 != 0 {
++        return Err(format!("odd-length hex {s}"));
++    }
++    (0..s.len())
++        .step_by(2)
++        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| format!("bad hex {s}: {e}")))
++        .collect()
++}
++
++/// SV1 prevhash (every 32-bit word byte-swapped) to header byte order.
++fn prevhash_to_header(stratum_hex: &str) -> Result<[u8; 32], String> {
++    let b = unhex(stratum_hex)?;
++    if b.len() != 32 {
++        return Err("prevhash must be 32 bytes".into());
++    }
++    let mut out = [0u8; 32];
++    for (o, w) in out.chunks_mut(4).zip(b.chunks(4)) {
++        o.copy_from_slice(&[w[3], w[2], w[1], w[0]]);
++    }
++    Ok(out)
++}
++
++/// SV1 share target for `difficulty` (diff1 = 0xffff << 208), little endian.
++/// Rounded down so a share that meets it also meets the server's exact target.
++fn target_from_difficulty(difficulty: f64) -> [u8; 32] {
++    let mut out = [0u8; 32];
++    if difficulty.is_nan() || difficulty <= 0.0 {
++        return out;
++    }
++    let mut t = 65535.0 * 2f64.powi(208) / difficulty * (1.0 - 1e-9);
++    if t >= 2f64.powi(256) {
++        return [0xff; 32];
++    }
++    for i in (0..32).rev() {
++        let scale = 2f64.powi(8 * i as i32);
++        let b = (t / scale).floor().clamp(0.0, 255.0);
++        out[i] = b as u8;
++        t -= b * scale;
++    }
++    out
++}
++
++/// Little-endian uint256 comparison: `hash <= target`.
++fn meets(hash: &[u8; 32], target: &[u8; 32]) -> bool {
++    for i in (0..32).rev() {
++        if hash[i] != target[i] {
++            return hash[i] < target[i];
++        }
++    }
++    true
++}
++
++#[derive(Clone)]
++struct Job {
++    id: String,
++    prevhash: [u8; 32],
++    coinb1: Vec<u8>,
++    coinb2: Vec<u8>,
++    branches: Vec<[u8; 32]>,
++    version: u32,
++    nbits: u32,
++    ntime: u32,
++}
++
++impl Job {
++    fn from_notify(p: &[Value]) -> Result<Self, String> {
++        let s = |i: usize| {
++            p.get(i)
++                .and_then(Value::as_str)
++                .ok_or(format!("notify param {i}"))
++        };
++        let u = |i: usize| s(i).and_then(|v| u32::from_str_radix(v, 16).map_err(|e| e.to_string()));
++        let branches = p
++            .get(4)
++            .and_then(Value::as_array)
++            .ok_or("notify merkle branch")?
++            .iter()
++            .map(|b| {
++                let v = unhex(b.as_str().ok_or("branch")?)?;
++                v.try_into()
++                    .map_err(|_| "branch must be 32 bytes".to_string())
++            })
++            .collect::<Result<Vec<[u8; 32]>, String>>()?;
++        Ok(Job {
++            id: s(0)?.to_string(),
++            prevhash: prevhash_to_header(s(1)?)?,
++            coinb1: unhex(s(2)?)?,
++            coinb2: unhex(s(3)?)?,
++            branches,
++            version: u(5)?,
++            nbits: u(6)?,
++            ntime: u(7)?,
++        })
++    }
++
++    /// 80-byte header for this job and extranonce, with nonce 0.
++    fn header(&self, extranonce1: &[u8], extranonce2: &[u8]) -> [u8; 80] {
++        let mut cb = Vec::with_capacity(self.coinb1.len() + 16 + self.coinb2.len());
++        cb.extend_from_slice(&self.coinb1);
++        cb.extend_from_slice(extranonce1);
++        cb.extend_from_slice(extranonce2);
++        cb.extend_from_slice(&self.coinb2);
++        let mut root = sha256d(&cb);
++        for b in &self.branches {
++            let mut cat = [0u8; 64];
++            cat[..32].copy_from_slice(&root);
++            cat[32..].copy_from_slice(b);
++            root = sha256d(&cat);
++        }
++        let mut h = [0u8; 80];
++        h[0..4].copy_from_slice(&self.version.to_le_bytes());
++        h[4..36].copy_from_slice(&self.prevhash);
++        h[36..68].copy_from_slice(&root);
++        h[68..72].copy_from_slice(&self.ntime.to_le_bytes());
++        h[72..76].copy_from_slice(&self.nbits.to_le_bytes());
++        h
++    }
++}
++
++struct Work {
++    job: Job,
++    extranonce1: Vec<u8>,
++    extranonce2_size: usize,
++    target: [u8; 32],
++}
++
++struct Found {
++    job_id: String,
++    extranonce2: Vec<u8>,
++    ntime: u32,
++    nonce: u32,
++    header: [u8; 80],
++    pow: [u8; 32],
++}
++
++struct Args {
++    url: String,
++    user: String,
++    pass: String,
++    threads: usize,
++    dim: Option<u32>,
++    shares: Option<u64>,
++}
++
++fn parse_args() -> Result<Args, String> {
++    let mut a = Args {
++        url: String::new(),
++        user: "aperture".into(),
++        pass: "x".into(),
++        threads: thread::available_parallelism()
++            .map(|n| n.get())
++            .unwrap_or(1),
++        dim: None,
++        shares: None,
++    };
++    let mut it = std::env::args().skip(1);
++    while let Some(k) = it.next() {
++        let mut v = || it.next().ok_or(format!("{k} needs a value"));
++        match k.as_str() {
++            "--url" => a.url = v()?,
++            "--user" => a.user = v()?,
++            "--pass" => a.pass = v()?,
++            "--threads" => a.threads = v()?.parse().map_err(|e| format!("--threads: {e}"))?,
++            "--dim" => a.dim = Some(v()?.parse().map_err(|e| format!("--dim: {e}"))?),
++            "--shares" => a.shares = Some(v()?.parse().map_err(|e| format!("--shares: {e}"))?),
++            "-h" | "--help" => {
++                println!(
++                    "aperture-sv1-miner --url host:port [--user U] [--pass P] [--threads N] \
++                     [--dim N] [--shares N]\n\n--dim defaults to APERTURE_POW_DIM / \
++                     APERTURE_NETWORK, else 512 (main/test); regtest uses 32."
++                );
++                std::process::exit(0);
++            }
++            _ => return Err(format!("unknown argument {k}")),
++        }
++    }
++    if a.url.is_empty() {
++        return Err("--url is required".into());
++    }
++    a.threads = a.threads.max(1);
++    Ok(a)
++}
++
++fn worker(
++    index: usize,
++    threads: usize,
++    work: Arc<Mutex<Option<Arc<Work>>>>,
++    generation: Arc<AtomicU64>,
++    stop: Arc<AtomicBool>,
++    hashes: Arc<AtomicU64>,
++    found: mpsc::Sender<Found>,
++) {
++    const BATCH: u32 = 64;
++    while !stop.load(Ordering::Relaxed) {
++        let gen = generation.load(Ordering::Acquire);
++        let Some(w) = work.lock().unwrap().clone() else {
++            thread::sleep(std::time::Duration::from_millis(20));
++            continue;
++        };
++        // Each thread owns extranonce2 values index, index + threads, ...
++        let mut en2_counter = index as u64;
++        'job: loop {
++            let mut en2 = vec![0u8; w.extranonce2_size];
++            for (i, b) in en2.iter_mut().enumerate().take(8) {
++                *b = (en2_counter >> (8 * i)) as u8;
++            }
++            let mut header = w.job.header(&w.extranonce1, &en2);
++            let mut nonce: u32 = 0;
++            loop {
++                for _ in 0..BATCH {
++                    header[76..80].copy_from_slice(&nonce.to_le_bytes());
++                    let pow = aperture_pow::pow_hash(&header);
++                    if meets(&pow, &w.target) {
++                        let _ = found.send(Found {
++                            job_id: w.job.id.clone(),
++                            extranonce2: en2.clone(),
++                            ntime: w.job.ntime,
++                            nonce,
++                            header,
++                            pow,
++                        });
++                    }
++                    nonce = nonce.wrapping_add(1);
++                    if nonce == 0 {
++                        break;
++                    }
++                }
++                hashes.fetch_add(BATCH as u64, Ordering::Relaxed);
++                if stop.load(Ordering::Relaxed) || generation.load(Ordering::Acquire) != gen {
++                    break 'job;
++                }
++                if nonce == 0 {
++                    en2_counter += threads as u64;
++                    continue 'job;
++                }
++            }
++        }
++    }
++}
++
++fn run(args: Args) -> Result<(), String> {
++    if let Some(n) = args.dim {
++        if !aperture_pow::is_valid_dim(n) {
++            return Err(format!("invalid --dim {n}"));
++        }
++        aperture_pow::set_dim(n);
++    }
++    println!(
++        "ApertureMatMul v1, dimension {}, {} threads",
++        aperture_pow::dim(),
++        args.threads
++    );
++    let stream = TcpStream::connect(&args.url).map_err(|e| format!("connect {}: {e}", args.url))?;
++    let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
++    let mut reader = BufReader::new(stream);
++    let send = |w: &mut TcpStream, v: Value| -> Result<(), String> {
++        let mut line = v.to_string();
++        line.push('\n');
++        w.write_all(line.as_bytes())
++            .map_err(|e| format!("send: {e}"))
++    };
++    send(
++        &mut writer,
++        json!({"id": 1, "method": "mining.subscribe", "params": ["aperture-sv1-miner/0.1"]}),
++    )?;
++    send(
++        &mut writer,
++        json!({"id": 2, "method": "mining.authorize", "params": [args.user, args.pass]}),
++    )?;
++
++    let work: Arc<Mutex<Option<Arc<Work>>>> = Arc::new(Mutex::new(None));
++    let generation = Arc::new(AtomicU64::new(0));
++    let stop = Arc::new(AtomicBool::new(false));
++    let hashes = Arc::new(AtomicU64::new(0));
++    let (found_tx, found_rx) = mpsc::channel::<Found>();
++    for i in 0..args.threads {
++        let (w, g, s, h, f) = (
++            work.clone(),
++            generation.clone(),
++            stop.clone(),
++            hashes.clone(),
++            found_tx.clone(),
++        );
++        let threads = args.threads;
++        thread::spawn(move || worker(i, threads, w, g, s, h, f));
++    }
++
++    // Submitter: shares go out on their own thread so the reader never blocks.
++    let pending: Arc<Mutex<HashMap<u64, Found>>> = Arc::new(Mutex::new(HashMap::new()));
++    {
++        let mut w = writer.try_clone().map_err(|e| e.to_string())?;
++        let pending = pending.clone();
++        let user = args.user.clone();
++        thread::spawn(move || {
++            let mut id = 100u64;
++            for f in found_rx {
++                let msg = json!({"id": id, "method": "mining.submit", "params": [
++                    user, f.job_id, hex(&f.extranonce2), format!("{:08x}", f.ntime), format!("{:08x}", f.nonce)]});
++                pending.lock().unwrap().insert(id, f);
++                let mut line = msg.to_string();
++                line.push('\n');
++                if w.write_all(line.as_bytes()).is_err() {
++                    break;
++                }
++                id += 1;
++            }
++        });
++    }
++
++    let mut extranonce1: Option<Vec<u8>> = None;
++    let mut extranonce2_size = 0usize;
++    let mut difficulty = 1.0f64;
++    let mut accepted = 0u64;
++    let mut rejected = 0u64;
++    let started = std::time::Instant::now();
++    let mut line = String::new();
++    loop {
++        line.clear();
++        if reader
++            .read_line(&mut line)
++            .map_err(|e| format!("read: {e}"))?
++            == 0
++        {
++            stop.store(true, Ordering::Relaxed);
++            return Err("connection closed".into());
++        }
++        let msg: Value = match serde_json::from_str(line.trim()) {
++            Ok(v) => v,
++            Err(_) => continue,
++        };
++        let id = msg.get("id").and_then(Value::as_u64);
++        match msg.get("method").and_then(Value::as_str) {
++            Some("mining.set_difficulty") => {
++                if let Some(d) = msg["params"].get(0).and_then(Value::as_f64) {
++                    difficulty = d;
++                    println!("difficulty {d}");
++                }
++            }
++            Some("mining.set_extranonce") => {
++                if let (Some(e1), Some(n)) = (
++                    msg["params"].get(0).and_then(Value::as_str),
++                    msg["params"].get(1).and_then(Value::as_u64),
++                ) {
++                    extranonce1 = Some(unhex(e1)?);
++                    extranonce2_size = n as usize;
++                }
++            }
++            Some("mining.notify") => {
++                let params = msg["params"].as_array().ok_or("notify params")?;
++                let job = Job::from_notify(params)?;
++                let Some(e1) = extranonce1.clone() else {
++                    continue;
++                };
++                println!("job {} (difficulty {difficulty})", job.id);
++                *work.lock().unwrap() = Some(Arc::new(Work {
++                    job,
++                    extranonce1: e1,
++                    extranonce2_size,
++                    target: target_from_difficulty(difficulty),
++                }));
++                generation.fetch_add(1, Ordering::Release);
++            }
++            Some(_) => {}
++            None => match id {
++                Some(1) => {
++                    let r = &msg["result"];
++                    let e1 = r
++                        .get(1)
++                        .and_then(Value::as_str)
++                        .ok_or(format!("bad subscribe reply {msg}"))?;
++                    extranonce1 = Some(unhex(e1)?);
++                    extranonce2_size =
++                        r.get(2).and_then(Value::as_u64).ok_or("extranonce2 size")? as usize;
++                    println!("subscribed: extranonce1 {e1}, extranonce2 size {extranonce2_size}");
++                }
++                Some(2) => {
++                    if msg["result"] != Value::Bool(true) {
++                        return Err(format!("authorize failed: {msg}"));
++                    }
++                    println!("authorized as {}", args.user);
++                }
++                Some(n) if n >= 100 => {
++                    let f = pending.lock().unwrap().remove(&n);
++                    if msg["result"] == Value::Bool(true) {
++                        accepted += 1;
++                        if let Some(f) = f {
++                            println!(
++                                "accepted job={} header={} pow={}",
++                                f.job_id,
++                                hex(&f.header),
++                                hex(&f.pow)
++                            );
++                        }
++                    } else {
++                        rejected += 1;
++                        println!("rejected: {}", msg["error"]);
++                    }
++                    let secs = started.elapsed().as_secs_f64().max(1e-3);
++                    println!(
++                        "shares {accepted} accepted / {rejected} rejected, {:.0} H/s",
++                        hashes.load(Ordering::Relaxed) as f64 / secs
++                    );
++                    if args.shares.is_some_and(|s| accepted >= s) {
++                        stop.store(true, Ordering::Relaxed);
++                        return Ok(());
++                    }
++                }
++                _ => {}
++            },
++        }
++    }
++}
++
++fn main() {
++    let args = match parse_args() {
++        Ok(a) => a,
++        Err(e) => {
++            eprintln!("error: {e}");
++            std::process::exit(2);
++        }
++    };
++    if let Err(e) = run(args) {
++        eprintln!("error: {e}");
++        std::process::exit(1);
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn diff1_target() {
++        let t = target_from_difficulty(1.0);
++        // 0x00000000ffff0000...0 (big endian) minus the rounding margin.
++        assert_eq!(&t[28..32], &[0, 0, 0, 0]);
++        assert_eq!(t[27], 0xff);
++        assert!(t[26] >= 0xfe);
++        assert_eq!(target_from_difficulty(1e-12), [0xff; 32]);
++        assert!(meets(&[0u8; 32], &t) && !meets(&[0xff; 32], &t));
++    }
++
++    #[test]
++    fn prevhash_word_swap() {
++        let s = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
++        let h = prevhash_to_header(s).unwrap();
++        assert_eq!(&h[..8], &[4, 3, 2, 1, 8, 7, 6, 5]);
++    }
++
++    #[test]
++    fn merkle_root_without_branches_is_coinbase_txid() {
++        let job = Job {
++            id: "1".into(),
++            prevhash: [0; 32],
++            coinb1: vec![1, 2],
++            coinb2: vec![5],
++            branches: vec![],
++            version: 0x2000_0000,
++            nbits: 0x207f_ffff,
++            ntime: 7,
++        };
++        let h = job.header(&[3], &[4]);
++        assert_eq!(&h[36..68], &sha256d(&[1, 2, 3, 4, 5]));
++        assert_eq!(&h[0..4], &0x2000_0000u32.to_le_bytes());
++        assert_eq!(&h[72..76], &0x207f_ffffu32.to_le_bytes());
++    }
++}
 diff --git a/aperture/config-examples/pool-aperture-mainnet.toml b/aperture/config-examples/pool-aperture-mainnet.toml
 new file mode 100644
 index 00000000..b8ddf931
@@ -429,6 +987,38 @@ index 00000000..6a58db37
 +[template_provider_type.Sv2Tp]
 +address = "127.0.0.1:18447"
 +public_key = "<sv2-tp authority key>"
+diff --git a/aperture/config-examples/tproxy-aperture-regtest.toml b/aperture/config-examples/tproxy-aperture-regtest.toml
+new file mode 100644
+index 00000000..2a9bd676
+--- /dev/null
++++ b/aperture/config-examples/tproxy-aperture-regtest.toml
+@@ -0,0 +1,26 @@
++# SRI translator (tProxy) for ApertureCoin regtest: SV1 miners (e.g.
++# aperture-sv1-miner) connect here; shares are validated with ApertureMatMul and
++# forwarded to the SRI pool over Stratum V2.
++# Run with APERTURE_POW_DIM=32 (regtest) or APERTURE_NETWORK=regtest in the
++# environment; main/test use the default 512.
++downstream_address = "127.0.0.1"
++downstream_port = 34255
++max_supported_version = 2
++min_supported_version = 2
++downstream_extranonce2_size = 4
++verify_payout = false
++aggregate_channels = false
++supported_extensions = []
++
++[downstream_difficulty_config]
++# ApertureMatMul CPU rates: ~50k H/s per core at n = 32 (regtest).
++min_individual_miner_hashrate = 50_000.0
++shares_per_minute = 6.0
++enable_vardiff = true
++job_keepalive_interval_secs = 60
++
++[[upstreams]]
++address = "127.0.0.1"
++port = 34254
++authority_pubkey = "<pool authority public key>"
++user_identity = "sri/solo/<rsci1... payout address>/worker1"
 diff --git a/integration-tests/lib/mining_device/mod.rs b/integration-tests/lib/mining_device/mod.rs
 index bef63af0..15674c93 100644
 --- a/integration-tests/lib/mining_device/mod.rs
