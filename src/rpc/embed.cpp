@@ -19,6 +19,10 @@ static std::vector<uint32_t> ParseEmbedInput(const UniValue& v)
     const intmodel::IntModel* model = embed::GetProtocolModel();
     if (!model) throw JSONRPCError(RPC_MISC_ERROR, "No protocol model loaded (ApertureMatMul v2 inactive)");
     std::vector<uint32_t> ids;
+    UniValue parsed;
+    if (v.isStr() && !v.get_str().empty() && v.get_str()[0] == '[' && parsed.read(v.get_str()) && parsed.isArray()) {
+        return ParseEmbedInput(parsed);
+    }
     if (v.isStr()) {
         if (model->Config().tokenizer != "bytes") {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "This model needs token ids (tokenize with its tokenizer, see contrib/aperture-model)");
