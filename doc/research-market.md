@@ -85,7 +85,7 @@ a sponsor who knows its own test set wins its own subsidy.
 | ID | Track | Submission | Held-out data | Metric |
 |---|---|---|---|---|
 | K0 | Kernels | Attack code against Assumption A1 or Fold (`doc/pouw-v2.md`) | Random σ drawn from a later block hash | Break: computes a ticket in less than the bound. Paid a fixed bounty, not a record. |
-| K1 | Kernels | ApertureMatMul v2 miner kernel | Random jobs and σ from a later block hash | Correctness on all vectors, then tickets per second on the hardware class (median of the committee) |
+| K1 | Kernels | ApertureMatMul v2 miner kernel | Random request batches and σ from a later block hash, run on the protocol model | Correctness on all vectors, then tickets per second on the hardware class (median of the committee) |
 | K2 | Kernels | int8 GEMM, attention, or quantization kernel for a pinned operator spec | Random shapes and inputs from a later block hash | Exact or bounded-error correctness, then throughput (median of the committee) |
 | M1 | ML | Training recipe (code + config) run by the evaluator from scratch on a pinned train split, within a FLOP budget | Validation shard selected from a sealed pool index by a later block hash | Validation loss at the budget. The evaluator counts the FLOPs. |
 | M2 | ML | Compression or language model under a size cap | Text that appears after the deadline in a pinned public feed (arXiv listing abstracts). Each committee member snapshots it independently and they must agree on the hash. | Bits per byte |
