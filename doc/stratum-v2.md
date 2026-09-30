@@ -28,7 +28,7 @@ Components
 | Reference CPU miner (solo, Template Distribution Protocol) | Done | `contrib/sv2-tp/overlay/src/aperture-sv2-miner.cpp` |
 | ApertureMatMul v2 over SV2 (useful-work extension) | Done: TP, miner, end-to-end test | `patches/0002-*`, `feature_sv2_pouw.py` |
 | End-to-end test | Done. Skipped unless `SV2TP`/`SV2MINER` are set | `test/functional/feature_sv2.py` |
-| Pool, Job Declarator and Translator proxy (SRI `sv2-apps`) | Done for ApertureMatMul v1. v2 pooling not started | `contrib/sri-pool`, `feature_sri_pool.py` |
+| Pool, Job Declarator and Translator proxy (SRI `sv2-apps`) | Done for v1 (pool, translator). v2 useful-work pooling done (pool and `aperture-pouw-miner`). v2 through JD is not implemented | `contrib/sri-pool`, `feature_sri_pool.py`, `feature_sri_pool_pouw.py` |
 | GPU miner | Done: CUDA/HIP kernels for v2. Not yet run on a GPU | `contrib/gpu-miner` |
 
 ApertureMatMul v2: the useful-work extension
@@ -144,10 +144,66 @@ APERTURE_SV1_MINER=contrib/sri-pool/work/sv2-apps/target/release/aperture-sv1-mi
     test/functional/feature_sri_pool.py
 ```
 
-Not yet covered is pooling ApertureMatMul v2 (useful work). It needs a Rust
-ticket verifier and Mining-protocol extension messages for the ticket and its
-r×r panel. It also needs the pool to forward the Template Distribution
-extension `0x4150`. Until then, v2 is mined solo with `aperture-sv2-miner`.
+### Pooled useful work (ApertureMatMul v2)
+
+The fork pools v2 over the same extension `0x4150`:
+
+| Message | Direction | Content |
+|---|---|---|
+| UsefulWorkTemplate (0x01) | sv2-tp → pool | template_id, batch_root, model_id, rank, requests |
+| SetUsefulWork (0x03, channel message) | pool → miner | channel_id, job_id, batch_root, model_id, rank, requests. Sent before each v2 NewMiningJob |
+| SubmitSharesStandard + TLV (0x4150, field 0x01) | miner → pool | op, tile_i, tile_j, span_s, r×r activation panel |
+| SubmitUsefulWorkSolution (0x02) | pool → sv2-tp | version, time, nonce, ticket, panel, coinbase |
+
+- **Negotiation.** The miner negotiates `0x4150` with RequestExtensions. The
+  pool supports it whenever a protocol model is configured:
+  `aperture_protocol_model = "<file.apm>"`, or `aperture_tiny_model = 1` on
+  regtest.
+- **Template ordering.** The pool holds a v2 NewTemplate until its
+  UsefulWorkTemplate arrives, then runs the protocol model over the batch.
+  Only then does it release the template, so a miner never gets a v2 job
+  without its batch.
+- **Share validation.** A v2 job's share is judged by its ticket hash.
+  - `channels_sv2::validate_share_with_ticket` calls a verifier registered by
+    the pool, and the rest of the share path is unchanged upstream logic:
+    accounting, duplicate detection, vardiff and BlockFound.
+  - The verifier computes σ from the share's header and the batch_root, then
+    `TicketPoW` from the node's C++. These are compiled into the pool from
+    this repository (`APERTURE_SRC`) by the `aperture_pouw` crate, not
+    reimplemented.
+- **Panel verification.** With `aperture_verify_panels` (the default), the
+  panel must also equal the pool's own forward-pass activations. Consensus
+  does not require this, but the pool rule makes every pooled share work on
+  the real inference.
+- **Block submission.** A share that meets the network target goes to sv2-tp
+  as SubmitUsefulWorkSolution. sv2-tp builds the v2 block, and the embedding
+  results are already template coinbase outputs.
+- **Miner.** `aperture-pouw-miner` is a standard-channel miner. It runs the
+  forward pass per batch and searches all tickets of every nonce with the
+  node's kernels (AVX-512 VNNI where available).
+- **Test.** `feature_sri_pool_pouw.py` runs apertured (v2 active, dev fund
+  enforced), sv2-tp, the pool and `aperture-pouw-miner`. It checks five
+  things:
+  - the pooled blocks are v2 and accepted;
+  - they pay the pool and keep the dev fund;
+  - they serve the embedding requests bit-identically to the node's model;
+  - their tickets are shares the pool accepted;
+  - a miner submitting panels other than the forward pass is rejected
+    (`useful-work-panel-mismatch`) before it can find a block.
+
+```sh
+SV2TP=contrib/sv2-tp/work/build/bin/sv2-tp \
+SRI_POOL=contrib/sri-pool/work/sv2-apps/target/release/pool_sv2 \
+APERTURE_POUW_MINER=contrib/sri-pool/work/sv2-apps/target/release/aperture-pouw-miner \
+    test/functional/feature_sri_pool_pouw.py
+```
+
+Not covered:
+
+- **SV1 translator.** v2 does not go through it, because SV1 has no field
+  for the panel.
+- **Job Declaration.** v2 is not implemented there: the JDS would have to run
+  the forward pass of each declared batch.
 
 Operating notes
 ---------------

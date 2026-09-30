@@ -35,8 +35,8 @@ diff -ruN '--exclude=target' stratum/sv2/channels-sv2/Cargo.toml sv2-apps/apertu
  [features]
 diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/aperture.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/aperture.rs
 --- a/src/aperture.rs	1970-01-01 00:00:00.000000000 +0000
-+++ b/src/aperture.rs	2026-09-30 16:07:25.837707407 +0000
-@@ -0,0 +1,81 @@
++++ b/src/aperture.rs	2026-09-30 16:49:02.053942661 +0000
+@@ -0,0 +1,149 @@
 +//! ApertureCoin proof of work for share validation (ApertureMatMul, see the
 +//! `aperture_pow` crate). The pool, JD client and translator all validate
 +//! shares through the channel types in this crate, so this is the single
@@ -62,6 +62,44 @@ diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/aperture.rs sv2-apps/a
 +    let raw = bitcoin::consensus::serialize(header);
 +    let bytes: [u8; 80] = raw.as_slice().try_into().expect("block headers serialize to 80 bytes");
 +    BlockHash::from_byte_array(aperture_pow::pow_hash(&bytes))
++}
++
++/// nVersion bit of an ApertureMatMul v2 (proof of useful work) header.
++pub const VERSION_POWV2: u32 = 0x100;
++
++/// Verifies a v2 share: `(template_id, 80-byte header, ticket TLV value)` to the
++/// ticket's proof-of-work hash (raw bytes, compared little endian), or the
++/// SV2 error code to reject it with. Registered by the application, which
++/// holds the protocol model; this crate has no model.
++pub type PowV2Verifier = dyn Fn(Option<u64>, &[u8; 80], &[u8]) -> Result<[u8; 32], &'static str> + Send + Sync;
++
++static POWV2_VERIFIER: std::sync::OnceLock<Box<PowV2Verifier>> = std::sync::OnceLock::new();
++
++/// Install the v2 share verifier (once per process).
++pub fn set_powv2_verifier(f: Box<PowV2Verifier>) -> bool {
++    POWV2_VERIFIER.set(f).is_ok()
++}
++
++/// Error code for a v2 job share without a valid ticket.
++pub const ERROR_CODE_POWV2_TICKET: &str = "invalid-useful-work-ticket";
++
++/// Proof-of-work hash of a share: ApertureMatMul v1 for v1 jobs; for v2 jobs
++/// the ticket hash of the attached ticket, checked by the registered verifier.
++pub(crate) fn share_pow_hash(
++    job_version: u32,
++    template_id: Option<u64>,
++    header: &Header,
++    ticket: Option<&[u8]>,
++) -> Result<BlockHash, &'static str> {
++    if job_version & VERSION_POWV2 == 0 {
++        return Ok(pow_block_hash(header));
++    }
++    let (Some(ticket), Some(verify)) = (ticket, POWV2_VERIFIER.get()) else {
++        return Err(ERROR_CODE_POWV2_TICKET);
++    };
++    let raw = bitcoin::consensus::serialize(header);
++    let bytes: [u8; 80] = raw.as_slice().try_into().expect("block headers serialize to 80 bytes");
++    verify(template_id, &bytes, ticket).map(BlockHash::from_byte_array)
 +}
 +
 +/// Set the network's ApertureMatMul matrix dimension (512 main/test, 32 regtest).
@@ -116,6 +154,36 @@ diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/aperture.rs sv2-apps/a
 +            differs |= by_matmul != by_sha;
 +        }
 +        assert!(found && differs);
++    }
++
++    #[test]
++    fn v2_jobs_need_a_verified_ticket() {
++        let header = Header {
++            version: bitcoin::block::Version::from_consensus(0x2000_0100),
++            prev_blockhash: BlockHash::all_zeros(),
++            merkle_root: bitcoin::TxMerkleNode::all_zeros(),
++            time: 1,
++            bits: bitcoin::CompactTarget::from_consensus(0x207fffff),
++            nonce: 2,
++        };
++        assert!(set_powv2_verifier(Box::new(|template_id, h, t| {
++            assert_eq!(template_id, Some(7));
++            assert_eq!(h[0..4], 0x2000_0100u32.to_le_bytes());
++            if t == [1, 2] {
++                Ok([9; 32])
++            } else {
++                Err("bad-ticket")
++            }
++        })));
++        // v2 job: no ticket, a bad ticket, a good ticket.
++        assert_eq!(share_pow_hash(VERSION_POWV2, Some(7), &header, None), Err(ERROR_CODE_POWV2_TICKET));
++        assert_eq!(share_pow_hash(VERSION_POWV2, Some(7), &header, Some(&[3])), Err("bad-ticket"));
++        assert_eq!(
++            share_pow_hash(VERSION_POWV2, Some(7), &header, Some(&[1, 2])).unwrap(),
++            BlockHash::from_byte_array([9; 32])
++        );
++        // v1 job: the ticket is ignored, the header hash is used.
++        assert_eq!(share_pow_hash(0x2000_0000, Some(7), &header, Some(&[1, 2])).unwrap(), pow_block_hash(&header));
 +    }
 +}
 diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/client/extended.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/client/extended.rs
@@ -179,8 +247,26 @@ diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/lib.rs sv2-apps/apertu
  
 diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/server/extended.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/server/extended.rs
 --- a/src/server/extended.rs	2026-09-30 15:58:04.091364217 +0000
-+++ b/src/server/extended.rs	2026-09-30 16:00:52.580308931 +0000
-@@ -1057,7 +1057,10 @@
++++ b/src/server/extended.rs	2026-09-30 16:48:47.853650638 +0000
+@@ -892,6 +892,17 @@
+         &mut self,
+         share: SubmitSharesExtendedOwned,
+     ) -> Result<ShareValidationResult, ShareValidationError> {
++        self.validate_share_with_ticket(share, None)
++    }
++
++    /// ApertureCoin: [`Self::validate_share`] for a share that may carry an
++    /// ApertureMatMul v2 ticket (the value of the `0x4150` TLV). Shares of v2
++    /// jobs are judged by the ticket hash; v1 jobs ignore `ticket`.
++    pub fn validate_share_with_ticket(
++        &mut self,
++        share: SubmitSharesExtendedOwned,
++        ticket: Option<&[u8]>,
++    ) -> Result<ShareValidationResult, ShareValidationError> {
+         // the accepted-share dedup cache is a hard budget on servers: forgetting a
+         // still-valid hash would re-enable duplicate-share replay, so once the budget is hit
+         // the channel must be closed by the embedding application
+@@ -1057,7 +1068,21 @@
          };
  
          // convert the header hash to a target type for easy comparison
@@ -188,11 +274,22 @@ diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/server/extended.rs sv2
 +        // ApertureCoin: shares and blocks are judged by the ApertureMatMul proof-of-work
 +        // hash; the double-SHA256 header hash stays the block identifier.
 +        let block_id = header.block_hash();
-+        let share_hash = crate::aperture::pow_block_hash(&header);
++        let share_hash = match crate::aperture::share_pow_hash(
++            job.get_version(),
++            match job.get_origin() { JobOrigin::NewTemplate(t) => Some(t.template_id), _ => None },
++            &header,
++            ticket,
++        ) {
++            Ok(hash) => hash,
++            Err(code) => {
++                self.share_accounting.increment_rejected_shares(code);
++                return Err(ShareValidationError::Invalid(code));
++            }
++        };
          let raw_share_hash: [u8; 32] = *share_hash.to_raw_hash().as_ref();
          let share_hash_target = Target::from_le_bytes(raw_share_hash);
          let share_hash_as_diff = share_hash_target.difficulty_float();
-@@ -1104,14 +1107,14 @@
+@@ -1104,14 +1129,14 @@
                  JobOrigin::NewTemplate(template) => {
                      let template_id = template.template_id;
                      return Ok(ShareValidationResult::BlockFound(
@@ -211,8 +308,26 @@ diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/server/extended.rs sv2
                      ));
 diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/server/standard.rs sv2-apps/aperture/stratum-patches/channels-sv2/src/server/standard.rs
 --- a/src/server/standard.rs	2026-09-30 15:58:04.092527788 +0000
-+++ b/src/server/standard.rs	2026-09-30 16:00:52.577830889 +0000
-@@ -887,7 +887,10 @@
++++ b/src/server/standard.rs	2026-09-30 16:48:47.852151220 +0000
+@@ -764,6 +764,17 @@
+         &mut self,
+         share: SubmitSharesStandardOwned,
+     ) -> Result<ShareValidationResult, ShareValidationError> {
++        self.validate_share_with_ticket(share, None)
++    }
++
++    /// ApertureCoin: [`Self::validate_share`] for a share that may carry an
++    /// ApertureMatMul v2 ticket (the value of the `0x4150` TLV). Shares of v2
++    /// jobs are judged by the ticket hash; v1 jobs ignore `ticket`.
++    pub fn validate_share_with_ticket(
++        &mut self,
++        share: SubmitSharesStandardOwned,
++        ticket: Option<&[u8]>,
++    ) -> Result<ShareValidationResult, ShareValidationError> {
+         // the accepted-share dedup cache is a hard budget on servers: forgetting a
+         // still-valid hash would re-enable duplicate-share replay, so once the budget is hit
+         // the channel must be closed by the embedding application
+@@ -887,7 +898,21 @@
          };
  
          // convert the header hash to a target type for easy comparison
@@ -220,11 +335,22 @@ diff -ruN '--exclude=target' stratum/sv2/channels-sv2/src/server/standard.rs sv2
 +        // ApertureCoin: shares and blocks are judged by the ApertureMatMul proof-of-work
 +        // hash; the double-SHA256 header hash stays the block identifier.
 +        let block_id = header.block_hash();
-+        let share_hash = crate::aperture::pow_block_hash(&header);
++        let share_hash = match crate::aperture::share_pow_hash(
++            job.get_version(),
++            Some(job.get_template().template_id),
++            &header,
++            ticket,
++        ) {
++            Ok(hash) => hash,
++            Err(code) => {
++                self.share_accounting.increment_rejected_shares(code);
++                return Err(ShareValidationError::Invalid(code));
++            }
++        };
          let share_raw_hash: [u8; 32] = *share_hash.to_raw_hash().as_ref();
          let share_hash_target = Target::from_le_bytes(share_raw_hash);
          let share_hash_as_diff = share_hash_target.difficulty_float();
-@@ -956,7 +959,7 @@
+@@ -956,7 +981,7 @@
                  .map_err(|_| ShareValidationError::InvalidCoinbase)?;
  
              return Ok(ShareValidationResult::BlockFound(

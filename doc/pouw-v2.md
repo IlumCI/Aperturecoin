@@ -407,6 +407,18 @@ Implementation status
   - `aperture-sv2-miner` runs the model and mines tickets over its own
     activations.
   - Tested end to end by `feature_sv2_pouw.py`.
+- **Pooled mining (SRI fork, `contrib/sri-pool`).**
+  - The pool runs the forward pass once per template and sends each job's
+    batch to miners (SetUsefulWork).
+  - Miners submit tickets as TLVs on standard shares.
+  - The pool verifies each share with the node's own C++ (`aperture_pouw`
+    bindings).
+  - Pool policy, stronger than consensus: a share's activation panel must equal
+    the pool's forward-pass activations. Consensus leaves A free because KW
+    hardness holds for any A. The pool rule makes every pooled ticket work on
+    the real inference.
+  - Tested end to end by `feature_sri_pool_pouw.py`, including rejection of
+    fabricated panels.
 - **Tests.**
   - `protocolmodel_tests`: golden vectors shared with Python;
     decode(noisy) = clean; ticket tile = tile of the noisy product.

@@ -11,6 +11,11 @@ patch series against the pinned upstream commits in `UPSTREAM_COMMITS`:
   - the pool's `aperture_pow_dim` key;
   - translator and mining-device hashing;
   - `aperture-sv1-miner`, the Stratum V1 CPU miner used with the translator;
+  - ApertureMatMul v2 pooling (extension `0x4150`):
+    - the `aperture_pouw` bindings to this repository's consensus C++;
+    - the pool's forward pass per template, ticket shares and panel
+      verification;
+    - `aperture-pouw-miner`;
   - the `[patch]` that swaps in the patched `channels_sv2`;
   - pool and translator config examples, and `aperture/README.md`.
 - `patches/0002-channels-sv2-aperture.patch`: applied to a copy of
@@ -20,6 +25,10 @@ patch series against the pinned upstream commits in `UPSTREAM_COMMITS`:
 ```sh
 contrib/sri-pool/build.sh            # -> contrib/sri-pool/work/sv2-apps/target/release/
 ```
+
+`build.sh` sets `APERTURE_SRC` to this checkout. The pool and
+`aperture-pouw-miner` compile the node's ApertureMatMul v2 and protocol-model
+sources from it.
 
 Design, configuration and the end-to-end test: `doc/stratum-v2.md`, section
 "SRI pool fork".

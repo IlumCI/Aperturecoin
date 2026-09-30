@@ -233,6 +233,7 @@ BASE_SCRIPTS = [
     'feature_pouw_v2_fraud.py',
     'feature_sv2_pouw.py',
     'feature_sri_pool.py',
+    'feature_sri_pool_pouw.py',
     'feature_nulldummy.py --descriptors',
     'mempool_accept.py',
     'mempool_expiry.py',

@@ -1,11 +1,30 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index e78173c9..d66fa7b8 100644
+index e78173c9..3b6c316d 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -141,6 +141,22 @@ version = "1.0.102"
+@@ -141,6 +141,41 @@ version = "1.0.102"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
  
++[[package]]
++name = "aperture_pouw"
++version = "0.1.0"
++dependencies = [
++ "cc",
++]
++
++[[package]]
++name = "aperture_pouw_miner"
++version = "0.1.0"
++dependencies = [
++ "aperture_pouw",
++ "aperture_pow",
++ "async-channel 1.9.0",
++ "stratum-apps",
++ "tokio",
++ "tokio-util",
++]
++
 +[[package]]
 +name = "aperture_pow"
 +version = "0.1.0"
@@ -25,7 +44,7 @@ index e78173c9..d66fa7b8 100644
  [[package]]
  name = "arbitrary"
  version = "1.4.2"
-@@ -1173,6 +1189,19 @@ dependencies = [
+@@ -1173,6 +1208,19 @@ dependencies = [
   "wyz",
  ]
  
@@ -45,7 +64,7 @@ index e78173c9..d66fa7b8 100644
  [[package]]
  name = "block-buffer"
  version = "0.9.0"
-@@ -1362,8 +1391,8 @@ dependencies = [
+@@ -1362,8 +1410,8 @@ dependencies = [
  [[package]]
  name = "channels_sv2"
  version = "8.0.0"
@@ -55,7 +74,7 @@ index e78173c9..d66fa7b8 100644
   "binary_sv2",
   "bitcoin",
   "mining_sv2",
-@@ -1609,6 +1638,12 @@ dependencies = [
+@@ -1609,6 +1657,12 @@ dependencies = [
   "unicode-xid",
  ]
  
@@ -68,37 +87,42 @@ index e78173c9..d66fa7b8 100644
  [[package]]
  name = "convert_case"
  version = "0.6.0"
-@@ -3552,6 +3587,7 @@ dependencies = [
+@@ -3552,6 +3606,8 @@ dependencies = [
  name = "pool_sv2"
  version = "0.7.1"
  dependencies = [
++ "aperture_pouw",
 + "aperture_pow",
   "async-channel 1.9.0",
   "clap",
   "hex",
 diff --git a/Cargo.toml b/Cargo.toml
-index 180dcaea..84a9be78 100644
+index 180dcaea..85b77cc9 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -2,6 +2,8 @@
+@@ -2,6 +2,10 @@
  resolver = "3"
  
  members = [
 +    "aperture/aperture-pow",
 +    "aperture/aperture-sv1-miner",
++    "aperture/aperture-pouw",
++    "aperture/aperture-pouw-miner",
      "bitcoin-core-sv2",
      "stratum-apps",
      "pool-apps/pool",
-@@ -15,6 +17,8 @@ members = [
+@@ -15,6 +19,10 @@ members = [
  # they are run explicitly with `-p integration_tests_sv2` rather than being
  # picked up by a bare `cargo build`/`cargo test` at the repository root.
  default-members = [
 +    "aperture/aperture-pow",
 +    "aperture/aperture-sv1-miner",
++    "aperture/aperture-pouw",
++    "aperture/aperture-pouw-miner",
      "bitcoin-core-sv2",
      "stratum-apps",
      "pool-apps/pool",
-@@ -22,3 +26,9 @@ default-members = [
+@@ -22,3 +30,9 @@ default-members = [
      "miner-apps/jd-client",
      "miner-apps/translator",
  ]
@@ -124,10 +148,10 @@ index 0a0c5469..98b92c6d 100644
  This repository contains the application-level crates, currently in **alpha** stage.
 diff --git a/aperture/README.md b/aperture/README.md
 new file mode 100644
-index 00000000..2bc4a62f
+index 00000000..bdafe0a1
 --- /dev/null
 +++ b/aperture/README.md
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,185 @@
 +# ApertureCoin fork of the SRI applications
 +
 +This fork of [stratum-mining/sv2-apps](https://github.com/stratum-mining/sv2-apps)
@@ -142,6 +166,7 @@ index 00000000..2bc4a62f
 +| Block identifier (`BlockFound`, prev hash) | `SHA256d(header)` | unchanged: `SHA256d(header)` |
 +| Payout addresses in `addr()` and user identities | Bitcoin | ApertureCoin: `sci1`/`tsci1`/`rsci1` (bech32/bech32m), base58 versions 23/83 (main) and 111/196/58 (test, regtest) |
 +| Template source | Bitcoin Core IPC or sv2-tp | ApertureCoin's sv2-tp (`contrib/sv2-tp` in the ApertureCoin repository) |
++| ApertureMatMul v2 (useful work) | none | extension `0x4150`: forward pass per template, ticket shares, panel verification (below) |
 +
 +The template's coinbase outputs are carried into every job unchanged. These
 +are the 1.5% development-fund output, the witness commitment and, once
@@ -181,10 +206,11 @@ index 00000000..2bc4a62f
 +## Build and test
 +
 +```sh
-+cargo build --release -p pool_sv2 -p jd_server_sv2 -p jd_client_sv2 -p translator_sv2 --bins
++export APERTURE_SRC=<path to the ApertureCoin source tree>   # consensus C++ for aperture_pouw
++cargo build --release -p pool_sv2 -p jd_server_sv2 -p jd_client_sv2 -p translator_sv2 \
++    -p aperture_sv1_miner -p aperture_pouw_miner --bins
 +cargo build --release -p integration_tests_sv2 --bin mining_device
-+cargo build --release -p aperture_sv1_miner
-+cargo test --release -p aperture_pow -p aperture_sv1_miner -p channels_sv2 -p stratum-apps --all-features
++cargo test --release -p aperture_pow -p aperture_pouw -p aperture_sv1_miner -p channels_sv2 -p stratum-apps --all-features
 +```
 +
 +The end-to-end test lives in the ApertureCoin repository. It runs apertured
@@ -210,17 +236,1719 @@ index 00000000..2bc4a62f
 +ApertureMatMul CPU rates. A CPU core does about 50k H/s at n = 32; at
 +n = 512 it is far lower.
 +
++## ApertureMatMul v2 pooling (proof of useful work)
++
++Under v2, a share is a *ticket*: one r×r×r tile of the noisy forward-pass
++matmuls of the protocol model, run over the template's embedding requests
++(ApertureCoin `doc/pouw-v2.md`). Pooling uses the Stratum V2 extension
++`0x4150`:
++
++| Message | Direction | Content |
++|---|---|---|
++| UsefulWorkTemplate (0x01) | sv2-tp → pool | template_id, batch_root, model_id, rank, requests |
++| SetUsefulWork (0x03, channel message) | pool → miner | channel_id, job_id, batch_root, model_id, rank, requests; sent before each v2 NewMiningJob |
++| SubmitSharesStandard + TLV (0x4150, 0x01) | miner → pool | op, tile_i, tile_j, span_s, r×r activation panel |
++| SubmitUsefulWorkSolution (0x02) | pool → sv2-tp | version, time, nonce, ticket, panel, coinbase |
++
++The miner negotiates `0x4150` with RequestExtensions. The pool adds it to its
++supported extensions automatically once a protocol model is configured.
++
++How the pool handles a v2 template:
++
++1. The pool holds a v2 NewTemplate until its UsefulWorkTemplate arrives. It
++   then runs the protocol model over the batch once, and only after that
++   releases the template to the channel manager. Miners are therefore never
++   given a job whose batch they cannot know.
++2. `channels_sv2` judges a v2 job's share by the ticket hash
++   (`validate_share_with_ticket`). The pool registers the verifier. Upstream
++   share accounting, duplicate detection, vardiff and `BlockFound` are
++   unchanged.
++3. The verifier:
++   - checks the ticket hash with the node's consensus code (`TicketPoW`);
++   - with `aperture_verify_panels` (the default), also requires the panel to
++     equal the pool's own forward-pass activations.
++
++   Consensus does not require the second check, because KW hardness holds for
++   any A. As pool policy it makes every pooled share provably work on the real
++   inference.
++4. A share that meets the network target goes to sv2-tp as
++   SubmitUsefulWorkSolution. sv2-tp rebuilds the block with the v2 header
++   extension, and the embedding results are already in the template's
++   coinbase outputs.
++
++Code:
++
++- `aperture/aperture-pouw/`: `aperture_pouw` crate.
++  - Bindings to the node's consensus C++: the protocol model (`.apm`), the
++    integer forward pass, `Seed`/`TicketPoW` and the ticket-search kernels
++    (AVX-512 VNNI where available).
++  - It is compiled from the ApertureCoin tree named by `APERTURE_SRC`, so the
++    pool and the miner run the node's code, not a second implementation.
++  - `wire.rs` holds the message formats.
++- `aperture/aperture-pouw-miner/`: `aperture-pouw-miner`, a standard-channel
++  SV2 miner for v2 (and v1) jobs.
++- Pool:
++  - `pool-apps/pool/src/lib/aperture.rs`: model, per-template forward passes,
++    verifier, extension frames;
++  - hooks in the template receiver, downstream and share handlers.
++- `aperture/stratum-patches/channels-sv2/src/aperture.rs`:
++  `share_pow_hash` and the verifier hook.
++
++Pool configuration:
++
++```toml
++aperture_protocol_model = "/path/to/model.apm"   # the node's -protocolmodel file
++# aperture_tiny_model = 1                        # regtest tiny model instead
++# aperture_verify_panels = true                  # default
++```
++
++Miner:
++
++```sh
++aperture-pouw-miner --pool <host>:34254 --pool-key <pool authority key> --user <identity> \
++    --protocolmodel /path/to/model.apm [--threads N]
++# regtest: --tinymodel 1 --rank 8
++```
++
++Test: `test/functional/feature_sri_pool_pouw.py` in the ApertureCoin
++repository. It runs apertured, sv2-tp, this pool and `aperture-pouw-miner`
++on regtest and checks the following:
++
++- the pooled v2 blocks are accepted;
++- they pay the pool and keep the dev fund;
++- they serve the embedding requests bit-identically to the node's model;
++- their tickets are shares the pool accepted;
++- a miner submitting panels that are not the forward pass is rejected with
++  `useful-work-panel-mismatch`.
++
++Building now needs `APERTURE_SRC`:
++
++```sh
++APERTURE_SRC=<aperturecoin> cargo build --release -p pool_sv2 -p aperture_pouw_miner ...
++```
++
 +## Not yet covered
 +
-+- ApertureMatMul v2 (proof of useful work) pooling. v2 shares are tickets
-+  over the miner's own forward pass (`doc/pouw-v2.md` in the ApertureCoin
-+  repository). Pooling them needs three things:
-+  - a Rust ticket verifier;
-+  - Mining-protocol extension messages that carry the ticket and its r×r panel;
-+  - forwarding of the Template Distribution extension `0x4150`.
++- v2 through the translator is not possible: Stratum V1 has no field for the
++  ticket panel. SV1 miners mine v1 only.
++- v2 through Job Declaration (JD client/server): custom jobs carry no batch,
++  so the JDS would have to run the forward pass of the declared batch. Not
++  implemented.
++- Extended channels verify v2 tickets (the same hook), but the pool sends
++  SetUsefulWork only for standard-channel and extended-channel jobs, not for
++  group-channel jobs. v2 miners therefore set REQUIRES_STANDARD_JOBS.
+diff --git a/aperture/aperture-pouw-miner/Cargo.toml b/aperture/aperture-pouw-miner/Cargo.toml
+new file mode 100644
+index 00000000..1853154b
+--- /dev/null
++++ b/aperture/aperture-pouw-miner/Cargo.toml
+@@ -0,0 +1,18 @@
++[package]
++name = "aperture_pouw_miner"
++version = "0.1.0"
++edition = "2021"
++description = "Stratum V2 pool miner for ApertureCoin: ApertureMatMul v2 useful work (protocol-model inference) and v1"
++license = "MIT OR Apache-2.0"
 +
-+  Until that exists, v2 blocks are mined solo against sv2-tp with
-+  `aperture-sv2-miner`.
++[[bin]]
++name = "aperture-pouw-miner"
++path = "src/main.rs"
++
++[dependencies]
++aperture_pouw = { path = "../aperture-pouw" }
++aperture_pow = { path = "../aperture-pow" }
++stratum-apps = { path = "../../stratum-apps" }
++async-channel = "1.5.1"
++tokio = { version = "1.44.1", features = ["full"] }
++tokio-util = { version = "0.7.10", default-features = false, features = ["codec"] }
+diff --git a/aperture/aperture-pouw-miner/src/main.rs b/aperture/aperture-pouw-miner/src/main.rs
+new file mode 100644
+index 00000000..770d3c2e
+--- /dev/null
++++ b/aperture/aperture-pouw-miner/src/main.rs
+@@ -0,0 +1,584 @@
++//! Stratum V2 pool miner for ApertureCoin.
++//!
++//! Mines standard channels of an SRI pool (this fork):
++//! - **v2 jobs** (nVersion bit 8): the pool sends each job's embedding-request
++//!   batch with SetUsefulWork (extension 0x4150). The miner runs the protocol
++//!   model over the batch (the useful work), then for every nonce searches all
++//!   r×r×r tickets of the noisy forward-pass matmuls. A winning ticket and its
++//!   activation panel go into the share's 0x4150 TLV. The search uses the
++//!   node's own kernels (AVX-512 VNNI where available) via `aperture_pouw`.
++//! - **v1 jobs**: ApertureMatMul v1 over the header.
++//!
++//! ```text
++//! aperture-pouw-miner --pool 127.0.0.1:34254 [--pool-key <authority key>] --user <identity>
++//!                     (--protocolmodel <file.apm> | --tinymodel [seed]) [--threads N]
++//!                     [--hashrate <tickets/s>] [--rank 32] [--shares N] [--corrupt-panels]
++//! ```
++//!
++//! Each submitted share is printed as
++//! `share job=<id> nonce=<n> ticket=<op>,<i>,<j>,<s> pow=<hex> header=<80-byte hex>`,
++//! and each pool answer as `accepted ...` or `rejected <code>`.
++
++use aperture_pouw::{
++    wire::{self, ShareTicket, UsefulWork},
++    Model, Work,
++};
++use std::{
++    collections::HashMap,
++    net::ToSocketAddrs,
++    sync::{
++        atomic::{AtomicBool, AtomicU64, Ordering},
++        Arc, Mutex,
++    },
++    time::{Duration, Instant},
++};
++use stratum_apps::{
++    key_utils::Secp256k1PublicKey,
++    network_helpers::noise_connection::Connection,
++    stratum_core::{
++        binary_sv2::Seq064KOwned,
++        codec_sv2::{EncodableFrame, SerializedFrame},
++        common_messages_sv2::{Protocol, SetupConnectionOwned},
++        extensions_sv2::RequestExtensionsOwned,
++        mining_sv2::{OpenStandardMiningChannelOwned, SubmitSharesStandardOwned},
++        noise_sv2::Initiator,
++        parsers_sv2::{
++            parse_message_frame_with_tlvs, AnyMessageOwned, CommonMessagesOwned,
++            ExtensionsNegotiationOwned, ExtensionsOwned, MiningOwned,
++        },
++    },
++    utils::types::OutboundFrame,
++};
++use tokio::net::TcpStream;
++use tokio_util::sync::CancellationToken;
++
++fn hex(b: &[u8]) -> String {
++    b.iter().map(|x| format!("{x:02x}")).collect()
++}
++
++struct Args {
++    pool: String,
++    pool_key: Option<String>,
++    user: String,
++    model_path: Option<String>,
++    tiny_seed: Option<u32>,
++    threads: usize,
++    hashrate: Option<f32>,
++    rank: u32,
++    shares: Option<u64>,
++    corrupt_panels: bool,
++}
++
++fn parse_args() -> Result<Args, String> {
++    let mut a = Args {
++        pool: String::new(),
++        pool_key: None,
++        user: "aperture-pouw-miner".into(),
++        model_path: None,
++        tiny_seed: None,
++        threads: std::thread::available_parallelism()
++            .map(|n| n.get())
++            .unwrap_or(1),
++        hashrate: None,
++        rank: 32,
++        shares: None,
++        corrupt_panels: false,
++    };
++    let args: Vec<String> = std::env::args().skip(1).collect();
++    let mut k = 0;
++    while k < args.len() {
++        let key = args[k].as_str();
++        let val = |k: usize| {
++            args.get(k + 1)
++                .cloned()
++                .ok_or(format!("{key} needs a value"))
++        };
++        let parse = |v: String| v.parse::<u64>().map_err(|e| format!("{key}: {e}"));
++        match key {
++            "--pool" => (a.pool, k) = (val(k)?, k + 1),
++            "--pool-key" => (a.pool_key, k) = (Some(val(k)?), k + 1),
++            "--user" => (a.user, k) = (val(k)?, k + 1),
++            "--protocolmodel" => (a.model_path, k) = (Some(val(k)?), k + 1),
++            "--tinymodel" => {
++                // Optional seed (regtest uses 1).
++                match args.get(k + 1).and_then(|v| v.parse::<u32>().ok()) {
++                    Some(seed) => (a.tiny_seed, k) = (Some(seed), k + 1),
++                    None => a.tiny_seed = Some(1),
++                }
++            }
++            "--threads" => (a.threads, k) = (parse(val(k)?)? as usize, k + 1),
++            "--hashrate" => {
++                (a.hashrate, k) = (
++                    Some(val(k)?.parse().map_err(|e| format!("--hashrate: {e}"))?),
++                    k + 1,
++                )
++            }
++            "--rank" => (a.rank, k) = (parse(val(k)?)? as u32, k + 1),
++            "--shares" => (a.shares, k) = (Some(parse(val(k)?)?), k + 1),
++            "--corrupt-panels" => a.corrupt_panels = true,
++            "-h" | "--help" => {
++                println!(
++                    "{}",
++                    include_str!("main.rs")
++                        .lines()
++                        .take_while(|l| l.starts_with("//!"))
++                        .map(|l| l.trim_start_matches("//!").trim_start())
++                        .collect::<Vec<_>>()
++                        .join("\n")
++                );
++                std::process::exit(0);
++            }
++            _ => return Err(format!("unknown argument {key}")),
++        }
++        k += 1;
++    }
++    if a.pool.is_empty() {
++        return Err("--pool is required".into());
++    }
++    if a.model_path.is_none() && a.tiny_seed.is_none() {
++        return Err("--protocolmodel <file.apm> or --tinymodel is required".into());
++    }
++    a.threads = a.threads.max(1);
++    Ok(a)
++}
++
++/// Work of the active job, shared with the mining threads.
++struct Job {
++    channel_id: u32,
++    job_id: u32,
++    version: u32,
++    prev_hash: [u8; 32],
++    merkle_root: [u8; 32],
++    nbits: u32,
++    ntime: u32,
++    target_le: [u8; 32],
++    /// v2 jobs: the forward pass and the batch_root.
++    useful: Option<(Arc<Work>, [u8; 32])>,
++}
++
++impl Job {
++    fn header(&self, nonce: u32) -> [u8; 80] {
++        let mut h = [0u8; 80];
++        h[0..4].copy_from_slice(&self.version.to_le_bytes());
++        h[4..36].copy_from_slice(&self.prev_hash);
++        h[36..68].copy_from_slice(&self.merkle_root);
++        h[68..72].copy_from_slice(&self.ntime.to_le_bytes());
++        h[72..76].copy_from_slice(&self.nbits.to_le_bytes());
++        h[76..80].copy_from_slice(&nonce.to_le_bytes());
++        h
++    }
++}
++
++struct Found {
++    job: Arc<Job>,
++    nonce: u32,
++    pow: [u8; 32],
++    ticket: Option<ShareTicket>,
++}
++
++fn meets(hash: &[u8; 32], target: &[u8; 32]) -> bool {
++    for i in (0..32).rev() {
++        if hash[i] != target[i] {
++            return hash[i] < target[i];
++        }
++    }
++    true
++}
++
++fn mine_thread(
++    index: u32,
++    threads: u32,
++    current: Arc<Mutex<Option<Arc<Job>>>>,
++    generation: Arc<AtomicU64>,
++    stop: Arc<AtomicBool>,
++    work_done: Arc<AtomicU64>,
++    found: async_channel::Sender<Found>,
++) {
++    while !stop.load(Ordering::Relaxed) {
++        let gen = generation.load(Ordering::Acquire);
++        let Some(job) = current.lock().unwrap().clone() else {
++            std::thread::sleep(Duration::from_millis(20));
++            continue;
++        };
++        let mut nonce = index;
++        while !stop.load(Ordering::Relaxed) && generation.load(Ordering::Acquire) == gen {
++            let header = job.header(nonce);
++            let hit = match &job.useful {
++                Some((work, batch_root)) => {
++                    let sigma = aperture_pouw::seed(&header, batch_root);
++                    let (hit, tickets) = work.search(&sigma, &job.target_le);
++                    work_done.fetch_add(tickets, Ordering::Relaxed);
++                    hit.map(|h| {
++                        (
++                            h.pow,
++                            Some(ShareTicket {
++                                ticket: h.ticket,
++                                panel: h.panel,
++                            }),
++                        )
++                    })
++                }
++                None => {
++                    work_done.fetch_add(1, Ordering::Relaxed);
++                    let pow = aperture_pow::pow_hash(&header);
++                    meets(&pow, &job.target_le).then_some((pow, None))
++                }
++            };
++            if let Some((pow, ticket)) = hit {
++                let _ = found.send_blocking(Found {
++                    job: job.clone(),
++                    nonce,
++                    pow,
++                    ticket,
++                });
++            }
++            nonce = nonce.wrapping_add(threads);
++            if nonce < threads {
++                break; // nonce space exhausted for this job; wait for new work
++            }
++        }
++        while !stop.load(Ordering::Relaxed) && generation.load(Ordering::Acquire) == gen {
++            std::thread::sleep(Duration::from_millis(20));
++        }
++    }
++}
++
++fn benchmark(model: &Arc<Model>, rank: u32, threads: usize) -> f32 {
++    let Ok(work) = Work::new(model.clone(), &[], rank) else {
++        return 1000.0;
++    };
++    let never = [0u8; 32];
++    let start = Instant::now();
++    let mut tickets = 0u64;
++    let mut sigma = [0u8; 32];
++    while start.elapsed() < Duration::from_millis(500) {
++        sigma[0] = sigma[0].wrapping_add(1);
++        tickets += work.search(&sigma, &never).1;
++    }
++    (tickets as f64 / start.elapsed().as_secs_f64() * threads as f64) as f32
++}
++
++fn frame_of(msg: AnyMessageOwned) -> OutboundFrame {
++    OutboundFrame::from_message(msg).expect("message frames")
++}
++
++/// A standard share with the v2 ticket TLV appended (raw frame).
++fn share_frame(share: SubmitSharesStandardOwned, ticket: Option<&ShareTicket>) -> OutboundFrame {
++    let frame = frame_of(AnyMessageOwned::Mining(MiningOwned::SubmitSharesStandard(
++        share,
++    )));
++    let Some(ticket) = ticket else { return frame };
++    let mut bytes = vec![0u8; frame.encoded_length()];
++    frame.encode_into(&mut bytes).expect("encode share");
++    wire::append_to_frame(&mut bytes, &ticket.to_tlv());
++    OutboundFrame::Raw(SerializedFrame::from_bytes(bytes.into()).expect("valid frame"))
++}
++
++#[tokio::main]
++async fn main() {
++    let args = match parse_args() {
++        Ok(a) => a,
++        Err(e) => {
++            eprintln!("error: {e}");
++            std::process::exit(2);
++        }
++    };
++    if let Err(e) = run(args).await {
++        eprintln!("error: {e}");
++        std::process::exit(1);
++    }
++}
++
++async fn run(args: Args) -> Result<(), String> {
++    let model = match (&args.model_path, args.tiny_seed) {
++        (Some(p), _) => Model::load_file(p)?,
++        (None, Some(seed)) => Model::tiny(seed)?,
++        _ => unreachable!(),
++    };
++    println!(
++        "protocol model {} ({} weight matmuls), {} kernels, {} threads",
++        hex(&model.model_id()),
++        model.num_ops(),
++        aperture_pouw::backend_name(),
++        args.threads
++    );
++    let hashrate = match args.hashrate {
++        Some(h) => h,
++        None => benchmark(&model, args.rank, args.threads),
++    };
++    println!("nominal hashrate {hashrate:.0} tickets/s");
++
++    let addr = args
++        .pool
++        .to_socket_addrs()
++        .map_err(|e| format!("{}: {e}", args.pool))?
++        .next()
++        .ok_or("pool address does not resolve")?;
++    let key = match &args.pool_key {
++        Some(k) => Some(
++            Secp256k1PublicKey::try_from(k.clone())
++                .map_err(|e| format!("--pool-key: {e:?}"))?
++                .0,
++        ),
++        None => None,
++    };
++    let stream = TcpStream::connect(addr)
++        .await
++        .map_err(|e| format!("connect {addr}: {e}"))?;
++    let (receiver, sender) =
++        Connection::connect::<OutboundFrame>(stream, Initiator::new(key), CancellationToken::new())
++            .await
++            .map_err(|e| format!("noise handshake: {e:?}"))?;
++    println!("connected to {addr}");
++
++    let send = |f: OutboundFrame| {
++        let sender = sender.clone();
++        async move { sender.send(f).await.map_err(|e| format!("send: {e}")) }
++    };
++    send(frame_of(AnyMessageOwned::Common(
++        CommonMessagesOwned::SetupConnection(SetupConnectionOwned {
++            protocol: Protocol::MiningProtocol,
++            min_version: 2,
++            max_version: 2,
++            flags: 0b001, // REQUIRES_STANDARD_JOBS
++            endpoint_host: addr.ip().to_string().try_into().unwrap(),
++            endpoint_port: addr.port(),
++            vendor: "ApertureCoin".to_string().try_into().unwrap(),
++            hardware_version: "aperture-pouw-miner".to_string().try_into().unwrap(),
++            firmware: env!("CARGO_PKG_VERSION").to_string().try_into().unwrap(),
++            device_id: "".to_string().try_into().unwrap(),
++        }),
++    )))
++    .await?;
++
++    let current: Arc<Mutex<Option<Arc<Job>>>> = Arc::new(Mutex::new(None));
++    let generation = Arc::new(AtomicU64::new(0));
++    let stop = Arc::new(AtomicBool::new(false));
++    let work_done = Arc::new(AtomicU64::new(0));
++    let (found_tx, found_rx) = async_channel::unbounded::<Found>();
++    for i in 0..args.threads {
++        let (c, g, s, w, f) = (
++            current.clone(),
++            generation.clone(),
++            stop.clone(),
++            work_done.clone(),
++            found_tx.clone(),
++        );
++        let n = args.threads as u32;
++        std::thread::spawn(move || mine_thread(i as u32, n, c, g, s, w, f));
++    }
++
++    let mut channel_id: Option<u32> = None;
++    let mut target_le = [0xffu8; 32];
++    let mut prev: Option<([u8; 32], u32, u32, u32)> = None; // prev_hash, nbits, min_ntime, job_id
++    let mut jobs: HashMap<u32, (u32, [u8; 32], Option<u32>)> = HashMap::new(); // job_id -> version, merkle_root, min_ntime
++    let mut job_work: HashMap<u32, (Arc<Work>, [u8; 32])> = HashMap::new();
++    let mut work_cache: HashMap<([u8; 32], u8), Arc<Work>> = HashMap::new();
++    let mut active_job: Option<u32> = None;
++    let mut sequence = 0u32;
++    let mut accepted = 0u64;
++    let mut rejected = 0u64;
++    let started = Instant::now();
++
++    let activate = |job_id: u32,
++                    jobs: &HashMap<u32, (u32, [u8; 32], Option<u32>)>,
++                    job_work: &HashMap<u32, (Arc<Work>, [u8; 32])>,
++                    prev: &Option<([u8; 32], u32, u32, u32)>,
++                    channel_id: Option<u32>,
++                    target_le: [u8; 32]| {
++        let (
++            Some((version, merkle_root, min_ntime)),
++            Some((prev_hash, nbits, prev_ntime, _)),
++            Some(channel_id),
++        ) = (jobs.get(&job_id), prev.as_ref(), channel_id)
++        else {
++            return false;
++        };
++        let useful = job_work.get(&job_id).cloned();
++        if version & aperture_pouw::VERSION_POWV2 != 0 && useful.is_none() {
++            println!("v2 job {job_id} without useful work: not mining it");
++            *current.lock().unwrap() = None;
++            generation.fetch_add(1, Ordering::Release);
++            return false;
++        }
++        *current.lock().unwrap() = Some(Arc::new(Job {
++            channel_id,
++            job_id,
++            version: *version,
++            prev_hash: *prev_hash,
++            merkle_root: *merkle_root,
++            nbits: *nbits,
++            ntime: min_ntime.unwrap_or(*prev_ntime).max(*prev_ntime),
++            target_le,
++            useful,
++        }));
++        generation.fetch_add(1, Ordering::Release);
++        true
++    };
++
++    let mut pending: HashMap<u32, Found> = HashMap::new();
++    loop {
++        tokio::select! {
++            found = found_rx.recv() => {
++                let Ok(f) = found else { break };
++                if Some(f.job.job_id) != active_job { continue; }
++                let mut ticket = f.ticket.clone();
++                if args.corrupt_panels {
++                    // Test hook: a panel that is not the forward pass's activations.
++                    if let Some(t) = ticket.as_mut() { t.panel[0] = if t.panel[0] == 1 { 2 } else { 1 }; }
++                }
++                sequence += 1;
++                let share = SubmitSharesStandardOwned {
++                    channel_id: f.job.channel_id,
++                    sequence_number: sequence,
++                    job_id: f.job.job_id,
++                    nonce: f.nonce,
++                    ntime: f.job.ntime,
++                    version: f.job.version,
++                };
++                let t = f.ticket.as_ref().map(|t| format!("{},{},{},{}", t.ticket.op, t.ticket.i, t.ticket.j, t.ticket.s)).unwrap_or_else(|| "-".into());
++                println!("share job={} nonce={} ticket={} pow={} header={}", f.job.job_id, f.nonce, t, hex(&f.pow), hex(&f.job.header(f.nonce)));
++                send(share_frame(share, ticket.as_ref())).await?;
++                pending.insert(sequence, f);
++            }
++            frame = receiver.recv() => {
++                let Ok(mut frame) = frame else { return Err("pool closed the connection".into()) };
++                let header = frame.header();
++                if header.ext_type_without_channel_msg() == wire::EXTENSION_TYPE {
++                    if header.msg_type() == wire::MSG_SET_USEFUL_WORK {
++                        let (_, job_id, uw) = wire::decode_set_useful_work(frame.payload())?;
++                        let work = useful_work(&model, &uw, &mut work_cache).await?;
++                        job_work.insert(job_id, (work, uw.batch_root));
++                    }
++                    continue;
++                }
++                let negotiated = [wire::EXTENSION_TYPE];
++                let (msg, _) = parse_message_frame_with_tlvs(header, frame.payload(), &negotiated).map_err(|e| format!("parse: {e:?}"))?;
++                match msg.into_owned() {
++                    AnyMessageOwned::Common(CommonMessagesOwned::SetupConnectionSuccess(_)) => {
++                        send(frame_of(AnyMessageOwned::Extensions(ExtensionsOwned::ExtensionsNegotiation(
++                            ExtensionsNegotiationOwned::RequestExtensions(RequestExtensionsOwned {
++                                request_id: 1,
++                                requested_extensions: Seq064KOwned::new(vec![wire::EXTENSION_TYPE]).unwrap(),
++                            }),
++                        ))))
++                        .await?;
++                    }
++                    AnyMessageOwned::Common(CommonMessagesOwned::SetupConnectionError(e)) => {
++                        return Err(format!("SetupConnection rejected: {e}"));
++                    }
++                    AnyMessageOwned::Extensions(ExtensionsOwned::ExtensionsNegotiation(m)) => match m {
++                        ExtensionsNegotiationOwned::RequestExtensionsSuccess(_) => {
++                            println!("extension 0x{:04x} negotiated", wire::EXTENSION_TYPE);
++                            send(frame_of(AnyMessageOwned::Mining(MiningOwned::OpenStandardMiningChannel(OpenStandardMiningChannelOwned {
++                                request_id: 1,
++                                user_identity: args.user.clone().try_into().unwrap(),
++                                nominal_hash_rate: hashrate,
++                                max_target: vec![0xffu8; 32].try_into().unwrap(),
++                            }))))
++                            .await?;
++                        }
++                        other => return Err(format!("the pool does not support useful work (0x4150): {other:?}")),
++                    },
++                    AnyMessageOwned::Mining(m) => match m {
++                        MiningOwned::OpenStandardMiningChannelSuccess(m) => {
++                            channel_id = Some(m.channel_id);
++                            target_le.copy_from_slice(m.target.as_ref());
++                            println!("channel {} open, target {}", m.channel_id, hex(&target_le.iter().rev().copied().collect::<Vec<_>>()));
++                        }
++                        MiningOwned::OpenMiningChannelError(e) => return Err(format!("OpenStandardMiningChannel rejected: {e}")),
++                        MiningOwned::SetTarget(m) => {
++                            target_le.copy_from_slice(m.maximum_target.as_ref());
++                            if let Some(id) = active_job {
++                                activate(id, &jobs, &job_work, &prev, channel_id, target_le);
++                            }
++                        }
++                        MiningOwned::NewMiningJob(m) => {
++                            let min_ntime = m.min_ntime.clone().into_inner();
++                            let mut root = [0u8; 32];
++                            root.copy_from_slice(m.merkle_root.as_ref());
++                            jobs.insert(m.job_id, (m.version, root, min_ntime));
++                            let kind = if m.version & aperture_pouw::VERSION_POWV2 != 0 { "v2" } else { "v1" };
++                            println!("job {} ({kind}{})", m.job_id, if min_ntime.is_none() { ", future" } else { "" });
++                            if min_ntime.is_some() && activate(m.job_id, &jobs, &job_work, &prev, channel_id, target_le) {
++                                active_job = Some(m.job_id);
++                            }
++                        }
++                        MiningOwned::SetNewPrevHash(m) => {
++                            let mut p = [0u8; 32];
++                            p.copy_from_slice(m.prev_hash.as_ref());
++                            prev = Some((p, m.nbits, m.min_ntime, m.job_id));
++                            if activate(m.job_id, &jobs, &job_work, &prev, channel_id, target_le) {
++                                active_job = Some(m.job_id);
++                            }
++                            // Older jobs are stale now.
++                            jobs.retain(|id, _| *id >= m.job_id);
++                            job_work.retain(|id, _| *id >= m.job_id);
++                        }
++                        MiningOwned::SubmitSharesSuccess(m) => {
++                            let n = m.new_submits_accepted_count as u64;
++                            accepted += n;
++                            let last = m.last_sequence_number;
++                            let mut acked: Vec<u32> = pending.keys().copied().filter(|s| *s <= last).collect();
++                            acked.sort();
++                            for s in acked {
++                                if let Some(f) = pending.remove(&s) {
++                                    println!("accepted seq={s} job={} pow={}", f.job.job_id, hex(&f.pow));
++                                }
++                            }
++                            let secs = started.elapsed().as_secs_f64();
++                            println!("shares {accepted} accepted / {rejected} rejected, {:.0} tickets/s", work_done.load(Ordering::Relaxed) as f64 / secs);
++                            if args.shares.is_some_and(|s| accepted >= s) {
++                                stop.store(true, Ordering::Relaxed);
++                                return Ok(());
++                            }
++                        }
++                        MiningOwned::SubmitSharesError(m) => {
++                            rejected += 1;
++                            pending.remove(&m.sequence_number);
++                            println!("rejected seq={} {}", m.sequence_number, String::from_utf8_lossy(m.error_code.as_ref()));
++                        }
++                        MiningOwned::CloseChannel(m) => return Err(format!("channel closed by the pool: {m}")),
++                        _ => {}
++                    },
++                    _ => {}
++                }
++            }
++        }
++    }
++    Ok(())
++}
++
++/// Forward pass over a job's batch, cached by batch_root and rank.
++async fn useful_work(
++    model: &Arc<Model>,
++    uw: &UsefulWork,
++    cache: &mut HashMap<([u8; 32], u8), Arc<Work>>,
++) -> Result<Arc<Work>, String> {
++    if uw.model_id != model.model_id() {
++        return Err(format!(
++            "the pool's model {} differs from ours {}",
++            hex(&uw.model_id),
++            hex(&model.model_id())
++        ));
++    }
++    if let Some(w) = cache.get(&(uw.batch_root, uw.rank)) {
++        return Ok(w.clone());
++    }
++    let (m, requests, rank) = (model.clone(), uw.requests.clone(), uw.rank as u32);
++    let started = Instant::now();
++    let work = tokio::task::spawn_blocking(move || Work::new(m, &requests, rank))
++        .await
++        .map_err(|e| e.to_string())??;
++    println!(
++        "useful work: {} embedding requests, forward pass {:.1} ms, rank {}",
++        uw.requests.len(),
++        started.elapsed().as_secs_f64() * 1e3,
++        uw.rank
++    );
++    if cache.len() > 16 {
++        cache.clear();
++    }
++    cache.insert((uw.batch_root, uw.rank), work.clone());
++    Ok(work)
++}
+diff --git a/aperture/aperture-pouw/Cargo.toml b/aperture/aperture-pouw/Cargo.toml
+new file mode 100644
+index 00000000..b3f31b12
+--- /dev/null
++++ b/aperture/aperture-pouw/Cargo.toml
+@@ -0,0 +1,13 @@
++[package]
++name = "aperture_pouw"
++version = "0.1.0"
++edition = "2021"
++description = "ApertureMatMul v2 (proof of useful work) for the SRI stack: bindings to ApertureCoin's consensus C++ (protocol model, tickets, kernels)"
++license = "MIT OR Apache-2.0"
++build = "build.rs"
++links = "aperture_pouw"
++
++[dependencies]
++
++[build-dependencies]
++cc = "1"
+diff --git a/aperture/aperture-pouw/build.rs b/aperture/aperture-pouw/build.rs
+new file mode 100644
+index 00000000..5f4f4882
+--- /dev/null
++++ b/aperture/aperture-pouw/build.rs
+@@ -0,0 +1,60 @@
++//! Compiles the ApertureCoin consensus sources this crate binds to, from the
++//! ApertureCoin tree named by `APERTURE_SRC`, so the pool and the miner run the
++//! node's exact code (no second implementation of consensus rules).
++use std::path::PathBuf;
++
++fn main() {
++    println!("cargo:rerun-if-env-changed=APERTURE_SRC");
++    println!("cargo:rerun-if-changed=cpp/shim.cpp");
++    let src = std::env::var("APERTURE_SRC").map(PathBuf::from).unwrap_or_else(|_| {
++        panic!("set APERTURE_SRC to the ApertureCoin source tree (the directory containing src/crypto/matmulpow_v2.cpp)")
++    });
++    let s = src.join("src");
++    assert!(
++        s.join("crypto/matmulpow_v2.cpp").exists(),
++        "APERTURE_SRC={} is not an ApertureCoin source tree with ApertureMatMul v2",
++        src.display()
++    );
++    for f in [
++        "crypto/matmulpow_v2.cpp",
++        "crypto/matmulpow_v2_kernel.cpp",
++        "model/apm.cpp",
++        "model/intmodel.cpp",
++    ] {
++        println!("cargo:rerun-if-changed={}", s.join(f).display());
++    }
++
++    // The C++ archive first: static libraries are resolved left to right.
++    cc::Build::new()
++        .cpp(true)
++        .std("c++17")
++        .files([
++            s.join("crypto/matmulpow_v2.cpp"),
++            s.join("crypto/matmulpow_v2_kernel.cpp"),
++            s.join("model/apm.cpp"),
++            s.join("model/intmodel.cpp"),
++            s.join("univalue/lib/univalue.cpp"),
++            s.join("univalue/lib/univalue_get.cpp"),
++            s.join("univalue/lib/univalue_read.cpp"),
++            s.join("univalue/lib/univalue_write.cpp"),
++            PathBuf::from("cpp/shim.cpp"),
++        ])
++        .include(&s)
++        .include(s.join("univalue/include"))
++        .opt_level(3)
++        .warnings(false)
++        .compile("aperture_pouw_cpp");
++    cc::Build::new()
++        .files(
++            ["blake3.c", "blake3_dispatch.c", "blake3_portable.c"]
++                .map(|f| s.join("crypto/blake3").join(f)),
++        )
++        .include(s.join("crypto/blake3"))
++        .define("BLAKE3_NO_AVX512", "1")
++        .define("BLAKE3_NO_AVX2", "1")
++        .define("BLAKE3_NO_SSE41", "1")
++        .define("BLAKE3_NO_SSE2", "1")
++        .opt_level(3)
++        .warnings(false)
++        .compile("aperture_blake3");
++}
+diff --git a/aperture/aperture-pouw/cpp/shim.cpp b/aperture/aperture-pouw/cpp/shim.cpp
+new file mode 100644
+index 00000000..cd3d6fc1
+--- /dev/null
++++ b/aperture/aperture-pouw/cpp/shim.cpp
+@@ -0,0 +1,214 @@
++// Copyright (c) 2026 The ApertureCoin developers
++// Distributed under the MIT software license, see the accompanying
++// file COPYING or http://www.opensource.org/licenses/mit-license.php.
++
++// C ABI over ApertureCoin's ApertureMatMul v2 consensus code for the Rust SRI
++// roles. The forward-pass batching rule (every request + EOS, in order; an
++// empty batch runs EOS only; traces concatenated per op) is the one
++// aperture-sv2-miner uses (contrib/sv2-tp), so pool and miner agree on every
++// activation row.
++
++#include <crypto/matmulpow_v2.h>
++#include <crypto/matmulpow_v2_kernel.h>
++#include <model/apm.h>
++#include <model/intmodel.h>
++
++#include <cstring>
++#include <memory>
++#include <string>
++#include <vector>
++
++namespace {
++
++void SetError(char* err, size_t len, const std::string& msg)
++{
++    if (!err || len == 0) return;
++    const size_t n = std::min(len - 1, msg.size());
++    memcpy(err, msg.data(), n);
++    err[n] = 0;
++}
++
++struct Model {
++    intmodel::IntModel model;
++};
++
++struct Work {
++    const Model* model{nullptr};
++    unsigned int rank{0};
++    std::vector<intmodel::OpTrace> trace;
++    std::vector<matmulpow_v2::OpInput> inputs;
++};
++
++Model* Init(std::unique_ptr<apm::Model> apm_model, char* err, size_t errlen)
++{
++    auto m = std::make_unique<Model>();
++    std::string error;
++    if (!m->model.Init(std::move(apm_model), error)) {
++        SetError(err, errlen, error);
++        return nullptr;
++    }
++    return m.release();
++}
++
++} // namespace
++
++extern "C" {
++
++void* apw_model_load_file(const char* path, char* err, size_t errlen)
++{
++    auto apm_model = std::make_unique<apm::Model>();
++    std::string error;
++    if (!apm_model->LoadFile(path, error)) {
++        SetError(err, errlen, error);
++        return nullptr;
++    }
++    return Init(std::move(apm_model), err, errlen);
++}
++
++void* apw_model_tiny(uint32_t seed, char* err, size_t errlen)
++{
++    auto apm_model = std::make_unique<apm::Model>();
++    std::string error;
++    if (!apm_model->Load(intmodel::BuildTinyModel(seed), error)) {
++        SetError(err, errlen, error);
++        return nullptr;
++    }
++    return Init(std::move(apm_model), err, errlen);
++}
++
++void apw_model_free(void* m) { delete static_cast<Model*>(m); }
++
++/** model_id as the 64-character hex string the node reports. */
++void apw_model_id_hex(const void* m, char out[65])
++{
++    const std::string& hex = static_cast<const Model*>(m)->model.Apm().ModelIdHex();
++    memset(out, 0, 65);
++    memcpy(out, hex.data(), std::min<size_t>(64, hex.size()));
++}
++
++uint32_t apw_model_num_ops(const void* m) { return static_cast<const Model*>(m)->model.Ops().size(); }
++
++/**
++ * Forward pass over a batch: ids is every request's token ids back to back,
++ * lens[k] the length of request k. Returns null on an invalid request.
++ */
++void* apw_work_new(const void* mp, const uint32_t* ids, const uint32_t* lens, size_t n_requests, uint32_t rank, char* err, size_t errlen)
++{
++    const Model* m = static_cast<const Model*>(mp);
++    if (rank == 0 || rank > 64) {
++        SetError(err, errlen, "invalid rank");
++        return nullptr;
++    }
++    auto w = std::make_unique<Work>();
++    w->model = m;
++    w->rank = rank;
++    std::vector<std::vector<uint32_t>> batch;
++    size_t off = 0;
++    for (size_t k = 0; k < n_requests; ++k) {
++        batch.emplace_back(ids + off, ids + off + lens[k]);
++        off += lens[k];
++    }
++    if (batch.empty()) batch.emplace_back();
++    for (auto& input : batch) {
++        input.push_back(m->model.Config().eos_token_id);
++        std::vector<intmodel::OpTrace> part;
++        if (m->model.Embed(input, &part).empty()) {
++            SetError(err, errlen, "request cannot be embedded");
++            return nullptr;
++        }
++        if (w->trace.empty()) {
++            w->trace = std::move(part);
++            continue;
++        }
++        for (size_t k = 0; k < w->trace.size(); ++k) {
++            w->trace[k].q.insert(w->trace[k].q.end(), part[k].q.begin(), part[k].q.end());
++            w->trace[k].rows += part[k].rows;
++        }
++    }
++    for (const auto& tr : w->trace) w->inputs.push_back(matmulpow_v2::OpInput{tr.op, tr.rows, tr.q.data()});
++    return w.release();
++}
++
++void apw_work_free(void* w) { delete static_cast<Work*>(w); }
++
++uint32_t apw_work_rows(const void* wp, uint16_t op)
++{
++    const Work* w = static_cast<const Work*>(wp);
++    for (const auto& tr : w->trace) {
++        if (tr.op == op) return tr.rows;
++    }
++    return 0;
++}
++
++/**
++ * The honest r x r activation panel A[rows i][K-block s] of op (rows past the
++ * end zero-padded), as the miner's kernels read it. Returns 0 if out of range.
++ */
++int apw_work_panel(const void* wp, uint16_t op, uint16_t i, uint16_t s, int8_t* out)
++{
++    const Work* w = static_cast<const Work*>(wp);
++    const unsigned int r = w->rank;
++    for (const auto& tr : w->trace) {
++        if (tr.op != op) continue;
++        if ((static_cast<uint64_t>(s) + 1) * r > tr.d_in) return 0;
++        if (static_cast<uint64_t>(i) * r >= (static_cast<uint64_t>(tr.rows) + r - 1) / r * r) return 0;
++        memset(out, 0, static_cast<size_t>(r) * r);
++        for (unsigned int x = 0; x < r; ++x) {
++            const uint64_t row = static_cast<uint64_t>(i) * r + x;
++            if (row < tr.rows) memcpy(out + x * r, tr.q.data() + row * tr.d_in + static_cast<size_t>(s) * r, r);
++        }
++        return 1;
++    }
++    return 0;
++}
++
++/**
++ * Search every ticket of one nonce (sigma) for pow <= target (little endian).
++ * Returns 1 and the lowest-numbered winning ticket, 0 if none. tickets
++ * receives the number of tickets evaluated.
++ */
++int apw_work_search(const void* wp, const unsigned char sigma[32], const unsigned char target_le[32], uint16_t ticket_out[4],
++                    int8_t* panel_out, unsigned char pow_out[32], uint64_t* tickets)
++{
++    const Work* w = static_cast<const Work*>(wp);
++    matmulpow_v2::SearchHit hit;
++    uint64_t n{0};
++    const bool found = matmulpow_v2::SearchNonce(matmulpow_v2::BestBackend(), sigma, w->rank, w->model->model.Ops(), w->inputs, target_le, hit, n);
++    if (tickets) *tickets = n;
++    if (!found) return 0;
++    ticket_out[0] = hit.ticket.op;
++    ticket_out[1] = hit.ticket.i;
++    ticket_out[2] = hit.ticket.j;
++    ticket_out[3] = hit.ticket.s;
++    memcpy(panel_out, hit.panel.data(), static_cast<size_t>(w->rank) * w->rank);
++    memcpy(pow_out, hit.pow, 32);
++    return 1;
++}
++
++/** sigma = BLAKE3("ApertureMatMul/v2/seed" || header80 || batch_root). */
++void apw_seed(const unsigned char header80[80], const unsigned char batch_root[32], unsigned char sigma[32])
++{
++    unsigned char buf[112];
++    memcpy(buf, header80, 80);
++    memcpy(buf + 80, batch_root, 32);
++    matmulpow_v2::Seed(buf, sizeof(buf), sigma);
++}
++
++/** Consensus ticket hash (what a node computes from the header). 0 if out of range. */
++int apw_ticket_pow(const void* mp, uint32_t rank, const unsigned char sigma[32], const uint16_t ticket[4], const int8_t* panel,
++                   size_t panel_len, unsigned char pow_out[32])
++{
++    const Model* m = static_cast<const Model*>(mp);
++    const auto& ops = m->model.Ops();
++    if (rank == 0 || panel_len != static_cast<size_t>(rank) * rank || ticket[0] >= ops.size()) return 0;
++    matmulpow_v2::Ticket t;
++    t.op = ticket[0];
++    t.i = ticket[1];
++    t.j = ticket[2];
++    t.s = ticket[3];
++    return matmulpow_v2::TicketPoW(sigma, rank, ops[t.op], t, panel, pow_out) ? 1 : 0;
++}
++
++const char* apw_backend_name() { return matmulpow_v2::BackendName(matmulpow_v2::BestBackend()); }
++
++} // extern "C"
+diff --git a/aperture/aperture-pouw/src/lib.rs b/aperture/aperture-pouw/src/lib.rs
+new file mode 100644
+index 00000000..d7f16842
+--- /dev/null
++++ b/aperture/aperture-pouw/src/lib.rs
+@@ -0,0 +1,326 @@
++//! ApertureMatMul v2 (proof of useful work, ApertureCoin `doc/pouw-v2.md`) for
++//! the SRI stack.
++//!
++//! These are bindings to the node's own consensus C++ (`src/crypto/matmulpow_v2*`,
++//! `src/model/{apm,intmodel}.cpp`), compiled from `APERTURE_SRC`, so the pool
++//! verifies and the miner searches exactly what a node checks:
++//!
++//! - [`Model`]: the protocol model (`.apm` file, or the regtest tiny model).
++//! - [`Work`]: one template's forward pass over its embedding requests. It gives
++//!   the int8 activations every ticket is taken from.
++//! - [`seed`], [`Model::ticket_pow`]: the header-level ticket check.
++//! - [`Work::search`]: all r×r×r tickets of one nonce, vectorized kernels.
++//!
++//! Wire formats of the pooled useful-work extension are in [`wire`].
++
++use std::{
++    ffi::{c_char, c_void, CStr, CString},
++    sync::Arc,
++};
++
++pub mod wire;
++
++extern "C" {
++    fn apw_model_load_file(path: *const c_char, err: *mut c_char, errlen: usize) -> *mut c_void;
++    fn apw_model_tiny(seed: u32, err: *mut c_char, errlen: usize) -> *mut c_void;
++    fn apw_model_free(m: *mut c_void);
++    fn apw_model_id_hex(m: *const c_void, out: *mut c_char);
++    fn apw_model_num_ops(m: *const c_void) -> u32;
++    fn apw_work_new(
++        m: *const c_void,
++        ids: *const u32,
++        lens: *const u32,
++        n: usize,
++        rank: u32,
++        err: *mut c_char,
++        errlen: usize,
++    ) -> *mut c_void;
++    fn apw_work_free(w: *mut c_void);
++    fn apw_work_rows(w: *const c_void, op: u16) -> u32;
++    fn apw_work_panel(w: *const c_void, op: u16, i: u16, s: u16, out: *mut i8) -> i32;
++    fn apw_work_search(
++        w: *const c_void,
++        sigma: *const u8,
++        target_le: *const u8,
++        ticket: *mut u16,
++        panel: *mut i8,
++        pow: *mut u8,
++        tickets: *mut u64,
++    ) -> i32;
++    fn apw_seed(header80: *const u8, batch_root: *const u8, sigma: *mut u8);
++    fn apw_ticket_pow(
++        m: *const c_void,
++        rank: u32,
++        sigma: *const u8,
++        ticket: *const u16,
++        panel: *const i8,
++        panel_len: usize,
++        pow: *mut u8,
++    ) -> i32;
++    fn apw_backend_name() -> *const c_char;
++}
++
++fn err_buf() -> Vec<u8> {
++    vec![0u8; 256]
++}
++
++fn err_string(buf: &[u8]) -> String {
++    CStr::from_bytes_until_nul(buf)
++        .map(|c| c.to_string_lossy().into_owned())
++        .unwrap_or_default()
++}
++
++/// A ticket: row tile `i`, column tile `j` and K-block `s` of weight matmul `op`.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct Ticket {
++    pub op: u16,
++    pub i: u16,
++    pub j: u16,
++    pub s: u16,
++}
++
++/// The protocol model. Immutable once loaded; share it with `Arc`.
++pub struct Model {
++    ptr: *mut c_void,
++    model_id: [u8; 32],
++}
++
++// The C++ model is immutable after Init and only read concurrently.
++unsafe impl Send for Model {}
++unsafe impl Sync for Model {}
++
++impl Model {
++    fn from_ptr(ptr: *mut c_void, err: &[u8]) -> Result<Arc<Self>, String> {
++        if ptr.is_null() {
++            return Err(err_string(err));
++        }
++        let mut hex = [0 as c_char; 65];
++        unsafe { apw_model_id_hex(ptr, hex.as_mut_ptr()) };
++        let hex = unsafe { CStr::from_ptr(hex.as_ptr()) }
++            .to_string_lossy()
++            .into_owned();
++        let mut model_id = [0u8; 32];
++        for (k, b) in model_id.iter_mut().enumerate() {
++            *b = u8::from_str_radix(&hex[2 * k..2 * k + 2], 16).map_err(|e| e.to_string())?;
++        }
++        Ok(Arc::new(Model { ptr, model_id }))
++    }
++
++    /// Load an `.apm` model file.
++    pub fn load_file(path: &str) -> Result<Arc<Self>, String> {
++        let c = CString::new(path).map_err(|e| e.to_string())?;
++        let mut err = err_buf();
++        let ptr =
++            unsafe { apw_model_load_file(c.as_ptr(), err.as_mut_ptr() as *mut c_char, err.len()) };
++        Self::from_ptr(ptr, &err)
++    }
++
++    /// The deterministic regtest model (`-tinymodel`, seed 1 on regtest).
++    pub fn tiny(seed: u32) -> Result<Arc<Self>, String> {
++        let mut err = err_buf();
++        let ptr = unsafe { apw_model_tiny(seed, err.as_mut_ptr() as *mut c_char, err.len()) };
++        Self::from_ptr(ptr, &err)
++    }
++
++    /// model_id in the byte order the node displays (and the TP sends).
++    pub fn model_id(&self) -> [u8; 32] {
++        self.model_id
++    }
++
++    pub fn num_ops(&self) -> u32 {
++        unsafe { apw_model_num_ops(self.ptr) }
++    }
++
++    /// Consensus ticket hash of `panel` under `sigma`; `None` if the ticket or
++    /// panel is out of range (a node rejects such a header).
++    pub fn ticket_pow(
++        &self,
++        rank: u32,
++        sigma: &[u8; 32],
++        t: Ticket,
++        panel: &[i8],
++    ) -> Option<[u8; 32]> {
++        let ticket = [t.op, t.i, t.j, t.s];
++        let mut pow = [0u8; 32];
++        let ok = unsafe {
++            apw_ticket_pow(
++                self.ptr,
++                rank,
++                sigma.as_ptr(),
++                ticket.as_ptr(),
++                panel.as_ptr(),
++                panel.len(),
++                pow.as_mut_ptr(),
++            )
++        };
++        (ok == 1).then_some(pow)
++    }
++}
++
++impl Drop for Model {
++    fn drop(&mut self) {
++        unsafe { apw_model_free(self.ptr) }
++    }
++}
++
++/// One template's forward pass (the useful work) and its ticket operands.
++pub struct Work {
++    ptr: *mut c_void,
++    model: Arc<Model>,
++    rank: u32,
++}
++
++unsafe impl Send for Work {}
++unsafe impl Sync for Work {}
++
++/// A winning ticket of one nonce.
++#[derive(Clone, Debug)]
++pub struct Hit {
++    pub ticket: Ticket,
++    pub panel: Vec<i8>,
++    pub pow: [u8; 32],
++}
++
++impl Work {
++    /// Run the protocol model over `requests` (token ids without EOS).
++    pub fn new(model: Arc<Model>, requests: &[Vec<u32>], rank: u32) -> Result<Arc<Self>, String> {
++        let ids: Vec<u32> = requests.iter().flatten().copied().collect();
++        let lens: Vec<u32> = requests.iter().map(|r| r.len() as u32).collect();
++        let mut err = err_buf();
++        let ptr = unsafe {
++            apw_work_new(
++                model.ptr,
++                ids.as_ptr(),
++                lens.as_ptr(),
++                lens.len(),
++                rank,
++                err.as_mut_ptr() as *mut c_char,
++                err.len(),
++            )
++        };
++        if ptr.is_null() {
++            return Err(err_string(&err));
++        }
++        Ok(Arc::new(Work { ptr, model, rank }))
++    }
++
++    pub fn rank(&self) -> u32 {
++        self.rank
++    }
++
++    pub fn model(&self) -> &Arc<Model> {
++        &self.model
++    }
++
++    /// Activation rows of weight matmul `op` (0 if the op is unknown).
++    pub fn rows(&self, op: u16) -> u32 {
++        unsafe { apw_work_rows(self.ptr, op) }
++    }
++
++    /// The honest activation panel of a ticket (what the miner must submit).
++    pub fn panel(&self, op: u16, i: u16, s: u16) -> Option<Vec<i8>> {
++        let mut out = vec![0i8; (self.rank * self.rank) as usize];
++        let ok = unsafe { apw_work_panel(self.ptr, op, i, s, out.as_mut_ptr()) };
++        (ok == 1).then_some(out)
++    }
++
++    /// Every ticket of one nonce against `target` (little endian); the
++    /// lowest-numbered winner, plus the number of tickets evaluated.
++    pub fn search(&self, sigma: &[u8; 32], target_le: &[u8; 32]) -> (Option<Hit>, u64) {
++        let mut ticket = [0u16; 4];
++        let mut panel = vec![0i8; (self.rank * self.rank) as usize];
++        let mut pow = [0u8; 32];
++        let mut tickets = 0u64;
++        let found = unsafe {
++            apw_work_search(
++                self.ptr,
++                sigma.as_ptr(),
++                target_le.as_ptr(),
++                ticket.as_mut_ptr(),
++                panel.as_mut_ptr(),
++                pow.as_mut_ptr(),
++                &mut tickets,
++            )
++        };
++        let hit = (found == 1).then(|| Hit {
++            ticket: Ticket {
++                op: ticket[0],
++                i: ticket[1],
++                j: ticket[2],
++                s: ticket[3],
++            },
++            panel,
++            pow,
++        });
++        (hit, tickets)
++    }
++}
++
++impl Drop for Work {
++    fn drop(&mut self) {
++        unsafe { apw_work_free(self.ptr) }
++    }
++}
++
++/// sigma = BLAKE3("ApertureMatMul/v2/seed" || header (80 bytes) || batch_root).
++pub fn seed(header80: &[u8; 80], batch_root: &[u8; 32]) -> [u8; 32] {
++    let mut sigma = [0u8; 32];
++    unsafe { apw_seed(header80.as_ptr(), batch_root.as_ptr(), sigma.as_mut_ptr()) };
++    sigma
++}
++
++/// Kernel backend of this CPU ("scalar" or "avx512-vnni").
++pub fn backend_name() -> String {
++    unsafe { CStr::from_ptr(apw_backend_name()) }
++        .to_string_lossy()
++        .into_owned()
++}
++
++/// nVersion bit announcing the v2 header extension.
++pub const VERSION_POWV2: u32 = 0x100;
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn tiny_model_id_matches_node() {
++        // ApertureCoin src/chainparams.cpp regtest protocol model (tiny model, seed 1).
++        let m = Model::tiny(1).unwrap();
++        let hex: String = m.model_id().iter().map(|b| format!("{b:02x}")).collect();
++        assert!(hex.starts_with("f4cb7bf6"), "{hex}");
++    }
++
++    #[test]
++    fn search_hit_verifies_and_matches_honest_panel() {
++        let m = Model::tiny(1).unwrap();
++        let w = Work::new(m.clone(), &[vec![5, 6, 7], vec![]], 8).unwrap();
++        let sigma = [7u8; 32];
++        let mut target = [0xffu8; 32];
++        target[31] = 0x0f;
++        let (hit, tickets) = w.search(&sigma, &target);
++        let hit = hit.expect("1/16 of tickets win");
++        assert!(tickets >= 1);
++        assert_eq!(
++            m.ticket_pow(8, &sigma, hit.ticket, &hit.panel),
++            Some(hit.pow)
++        );
++        assert_eq!(
++            w.panel(hit.ticket.op, hit.ticket.i, hit.ticket.s).unwrap(),
++            hit.panel
++        );
++        // A changed panel changes the ticket hash.
++        let mut bad = hit.panel.clone();
++        bad[0] = if bad[0] == 1 { 2 } else { 1 };
++        assert_ne!(m.ticket_pow(8, &sigma, hit.ticket, &bad), Some(hit.pow));
++        // Out-of-range activation (|a| > 95) is rejected like a node does.
++        bad[0] = 100;
++        assert_eq!(m.ticket_pow(8, &sigma, hit.ticket, &bad), None);
++    }
++
++    #[test]
++    fn invalid_request_is_rejected() {
++        let m = Model::tiny(1).unwrap();
++        assert!(Work::new(m, &[vec![0xffffff]], 8).is_err());
++    }
++}
+diff --git a/aperture/aperture-pouw/src/wire.rs b/aperture/aperture-pouw/src/wire.rs
+new file mode 100644
+index 00000000..296e0e74
+--- /dev/null
++++ b/aperture/aperture-pouw/src/wire.rs
+@@ -0,0 +1,355 @@
++//! Stratum V2 extension `0x4150` ("AP"), ApertureMatMul v2 useful work.
++//!
++//! Template Distribution (sv2-tp <-> pool), unchanged from ApertureCoin
++//! `contrib/sv2-tp`:
++//!
++//! | msg | name | direction | payload |
++//! |---|---|---|---|
++//! | 0x01 | UsefulWorkTemplate | TP -> pool | template_id u64, [`UsefulWork`] |
++//! | 0x02 | SubmitUsefulWorkSolution | pool -> TP | [`Solution`] |
++//!
++//! Mining protocol (pool <-> miner), added by this fork:
++//!
++//! | msg / field | name | direction | payload |
++//! |---|---|---|---|
++//! | 0x03 (channel msg) | SetUsefulWork | pool -> miner | channel_id u32, job_id u32, [`UsefulWork`] |
++//! | TLV (0x4150, 0x01) on SubmitSharesStandard | UsefulWorkShare | miner -> pool | [`ShareTicket`] |
++//!
++//! A miner negotiates the extension with RequestExtensions. The pool sends
++//! SetUsefulWork right before every NewMiningJob of a v2 template (nVersion
++//! bit 8). The miner runs the forward pass, searches tickets per nonce, and
++//! submits a SubmitSharesStandard carrying the winning ticket and its r×r
++//! activation panel in the TLV. All integers are little endian.
++
++use crate::Ticket;
++
++pub const EXTENSION_TYPE: u16 = 0x4150;
++pub const MSG_USEFUL_WORK_TEMPLATE: u8 = 0x01;
++pub const MSG_SUBMIT_USEFUL_WORK_SOLUTION: u8 = 0x02;
++pub const MSG_SET_USEFUL_WORK: u8 = 0x03;
++pub const TLV_FIELD_SHARE_TICKET: u8 = 0x01;
++
++/// Bit 15 of the frame's extension_type: the message is addressed to a channel.
++pub const CHANNEL_MSG_BIT: u16 = 0x8000;
++
++/// A template's useful work: the embedding request batch and the ticket rank.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct UsefulWork {
++    pub batch_root: [u8; 32],
++    /// Display byte order (as `getblocktemplate` and the node's logs show it).
++    pub model_id: [u8; 32],
++    pub rank: u8,
++    /// Token ids of each request, without EOS (u24 on the wire).
++    pub requests: Vec<Vec<u32>>,
++}
++
++struct Reader<'a> {
++    b: &'a [u8],
++}
++
++impl<'a> Reader<'a> {
++    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
++        if self.b.len() < n {
++            return Err("truncated message".into());
++        }
++        let (a, rest) = self.b.split_at(n);
++        self.b = rest;
++        Ok(a)
++    }
++    fn u8(&mut self) -> Result<u8, String> {
++        Ok(self.take(1)?[0])
++    }
++    fn u16(&mut self) -> Result<u16, String> {
++        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
++    }
++    fn u32(&mut self) -> Result<u32, String> {
++        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
++    }
++    fn u64(&mut self) -> Result<u64, String> {
++        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
++    }
++    fn arr32(&mut self) -> Result<[u8; 32], String> {
++        Ok(self.take(32)?.try_into().unwrap())
++    }
++    fn done(&self) -> Result<(), String> {
++        if self.b.is_empty() {
++            Ok(())
++        } else {
++            Err("trailing bytes".into())
++        }
++    }
++}
++
++impl UsefulWork {
++    fn read(r: &mut Reader) -> Result<Self, String> {
++        let batch_root = r.arr32()?;
++        let model_id = r.arr32()?;
++        let rank = r.u8()?;
++        let count = r.u16()?;
++        let mut requests = Vec::with_capacity(count as usize);
++        for _ in 0..count {
++            let n = r.u16()?;
++            let raw = r.take(3 * n as usize)?;
++            requests.push(
++                raw.chunks(3)
++                    .map(|c| c[0] as u32 | (c[1] as u32) << 8 | (c[2] as u32) << 16)
++                    .collect(),
++            );
++        }
++        Ok(UsefulWork {
++            batch_root,
++            model_id,
++            rank,
++            requests,
++        })
++    }
++
++    fn write(&self, out: &mut Vec<u8>) {
++        out.extend_from_slice(&self.batch_root);
++        out.extend_from_slice(&self.model_id);
++        out.push(self.rank);
++        out.extend_from_slice(&(self.requests.len() as u16).to_le_bytes());
++        for ids in &self.requests {
++            out.extend_from_slice(&(ids.len() as u16).to_le_bytes());
++            for id in ids {
++                out.extend_from_slice(&id.to_le_bytes()[..3]);
++            }
++        }
++    }
++}
++
++/// UsefulWorkTemplate (TP -> pool).
++pub fn decode_useful_work_template(payload: &[u8]) -> Result<(u64, UsefulWork), String> {
++    let mut r = Reader { b: payload };
++    let template_id = r.u64()?;
++    let uw = UsefulWork::read(&mut r)?;
++    r.done()?;
++    Ok((template_id, uw))
++}
++
++pub fn encode_useful_work_template(template_id: u64, uw: &UsefulWork) -> Vec<u8> {
++    let mut out = template_id.to_le_bytes().to_vec();
++    uw.write(&mut out);
++    out
++}
++
++/// SetUsefulWork (pool -> miner).
++pub fn encode_set_useful_work(channel_id: u32, job_id: u32, uw: &UsefulWork) -> Vec<u8> {
++    let mut out = channel_id.to_le_bytes().to_vec();
++    out.extend_from_slice(&job_id.to_le_bytes());
++    uw.write(&mut out);
++    out
++}
++
++pub fn decode_set_useful_work(payload: &[u8]) -> Result<(u32, u32, UsefulWork), String> {
++    let mut r = Reader { b: payload };
++    let channel_id = r.u32()?;
++    let job_id = r.u32()?;
++    let uw = UsefulWork::read(&mut r)?;
++    r.done()?;
++    Ok((channel_id, job_id, uw))
++}
++
++/// The ticket and activation panel attached to a share.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct ShareTicket {
++    pub ticket: Ticket,
++    pub panel: Vec<i8>,
++}
++
++impl ShareTicket {
++    pub fn encode(&self) -> Vec<u8> {
++        let mut out = Vec::with_capacity(8 + self.panel.len());
++        for v in [self.ticket.op, self.ticket.i, self.ticket.j, self.ticket.s] {
++            out.extend_from_slice(&v.to_le_bytes());
++        }
++        out.extend(self.panel.iter().map(|&a| a as u8));
++        out
++    }
++
++    pub fn decode(value: &[u8]) -> Result<Self, String> {
++        let mut r = Reader { b: value };
++        let ticket = Ticket {
++            op: r.u16()?,
++            i: r.u16()?,
++            j: r.u16()?,
++            s: r.u16()?,
++        };
++        Ok(ShareTicket {
++            ticket,
++            panel: r.b.iter().map(|&b| b as i8).collect(),
++        })
++    }
++
++    /// The TLV bytes appended to a SubmitSharesStandard payload.
++    pub fn to_tlv(&self) -> Vec<u8> {
++        let value = self.encode();
++        let mut out = EXTENSION_TYPE.to_le_bytes().to_vec();
++        out.push(TLV_FIELD_SHARE_TICKET);
++        out.extend_from_slice(&(value.len() as u16).to_le_bytes());
++        out.extend_from_slice(&value);
++        out
++    }
++}
++
++/// SubmitUsefulWorkSolution (pool -> TP): the sv2-tp rebuilds the block with
++/// the v2 header extension and submits it.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct Solution {
++    pub template_id: u64,
++    pub version: u32,
++    pub time: u32,
++    pub nonce: u32,
++    pub ticket: Ticket,
++    pub panel: Vec<i8>,
++    /// Serialized coinbase transaction, with witness.
++    pub coinbase: Vec<u8>,
++}
++
++impl Solution {
++    pub fn encode(&self) -> Vec<u8> {
++        let mut out = self.template_id.to_le_bytes().to_vec();
++        out.extend_from_slice(&self.version.to_le_bytes());
++        out.extend_from_slice(&self.time.to_le_bytes());
++        out.extend_from_slice(&self.nonce.to_le_bytes());
++        for v in [self.ticket.op, self.ticket.i, self.ticket.j, self.ticket.s] {
++            out.extend_from_slice(&v.to_le_bytes());
++        }
++        out.extend_from_slice(&(self.panel.len() as u16).to_le_bytes());
++        out.extend(self.panel.iter().map(|&a| a as u8));
++        out.extend_from_slice(&(self.coinbase.len() as u32).to_le_bytes());
++        out.extend_from_slice(&self.coinbase);
++        out
++    }
++
++    pub fn decode(payload: &[u8]) -> Result<Self, String> {
++        let mut r = Reader { b: payload };
++        let template_id = r.u64()?;
++        let (version, time, nonce) = (r.u32()?, r.u32()?, r.u32()?);
++        let ticket = Ticket {
++            op: r.u16()?,
++            i: r.u16()?,
++            j: r.u16()?,
++            s: r.u16()?,
++        };
++        let n = r.u16()? as usize;
++        let panel = r.take(n)?.iter().map(|&b| b as i8).collect();
++        let cb = r.u32()? as usize;
++        let coinbase = r.take(cb)?.to_vec();
++        r.done()?;
++        Ok(Solution {
++            template_id,
++            version,
++            time,
++            nonce,
++            ticket,
++            panel,
++            coinbase,
++        })
++    }
++}
++
++/// A complete SV2 frame (6-byte header + payload), unencrypted; the noise
++/// layer encrypts it like any other frame.
++pub fn frame(extension_type: u16, msg_type: u8, payload: &[u8]) -> Vec<u8> {
++    let len = payload.len() as u32;
++    assert!(len < 1 << 24, "SV2 payload too long");
++    let mut out = Vec::with_capacity(6 + payload.len());
++    out.extend_from_slice(&extension_type.to_le_bytes());
++    out.push(msg_type);
++    out.extend_from_slice(&len.to_le_bytes()[..3]);
++    out.extend_from_slice(payload);
++    out
++}
++
++/// Append bytes (a TLV) to a complete frame, fixing its length field.
++pub fn append_to_frame(frame: &mut Vec<u8>, extra: &[u8]) {
++    let len = u32::from_le_bytes([frame[3], frame[4], frame[5], 0]) + extra.len() as u32;
++    assert!(len < 1 << 24, "SV2 payload too long");
++    frame[3..6].copy_from_slice(&len.to_le_bytes()[..3]);
++    frame.extend_from_slice(extra);
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn uw() -> UsefulWork {
++        UsefulWork {
++            batch_root: [1; 32],
++            model_id: [2; 32],
++            rank: 8,
++            requests: vec![vec![1, 0x123456], vec![]],
++        }
++    }
++
++    #[test]
++    fn round_trips() {
++        let (id, got) =
++            decode_useful_work_template(&encode_useful_work_template(9, &uw())).unwrap();
++        assert_eq!((id, got), (9, uw()));
++        let (c, j, got) = decode_set_useful_work(&encode_set_useful_work(3, 4, &uw())).unwrap();
++        assert_eq!((c, j, got), (3, 4, uw()));
++        let t = ShareTicket {
++            ticket: Ticket {
++                op: 1,
++                i: 2,
++                j: 3,
++                s: 4,
++            },
++            panel: vec![-95, 0, 95],
++        };
++        assert_eq!(ShareTicket::decode(&t.encode()).unwrap(), t);
++        let tlv = t.to_tlv();
++        assert_eq!(&tlv[..5], &[0x50, 0x41, 0x01, 11, 0]);
++        let s = Solution {
++            template_id: 7,
++            version: 0x2000_0100,
++            time: 1,
++            nonce: 2,
++            ticket: t.ticket,
++            panel: t.panel.clone(),
++            coinbase: vec![9; 10],
++        };
++        assert_eq!(Solution::decode(&s.encode()).unwrap(), s);
++        assert!(decode_useful_work_template(&[0; 3]).is_err());
++    }
++
++    #[test]
++    fn solution_layout_matches_sv2_tp() {
++        // contrib/sv2-tp rpc_mining.cpp: template_id u64 | version u32 | timestamp u32 | nonce u32 |
++        // op i j s u16 | panel_len u16 | panel | coinbase_len u32 | coinbase
++        let s = Solution {
++            template_id: 1,
++            version: 2,
++            time: 3,
++            nonce: 4,
++            ticket: Ticket {
++                op: 5,
++                i: 6,
++                j: 7,
++                s: 8,
++            },
++            panel: vec![1, -1],
++            coinbase: vec![0xaa],
++        };
++        let e = s.encode();
++        assert_eq!(e.len(), 8 + 12 + 8 + 2 + 2 + 4 + 1);
++        assert_eq!(&e[28..30], &[2, 0]);
++        assert_eq!(&e[30..32], &[1, 0xff]);
++        assert_eq!(&e[32..36], &[1, 0, 0, 0]);
++    }
++
++    #[test]
++    fn frames() {
++        let mut f = frame(
++            EXTENSION_TYPE | CHANNEL_MSG_BIT,
++            MSG_SET_USEFUL_WORK,
++            &[1, 2],
++        );
++        assert_eq!(f, vec![0x50, 0xc1, 3, 2, 0, 0, 1, 2]);
++        append_to_frame(&mut f, &[9]);
++        assert_eq!(&f[3..6], &[3, 0, 0]);
++        assert_eq!(f.len(), 9);
++    }
++}
 diff --git a/aperture/aperture-pow/Cargo.toml b/aperture/aperture-pow/Cargo.toml
 new file mode 100644
 index 00000000..c0cb30dd
@@ -927,10 +2655,10 @@ index 00000000..3b3c2ac1
 +}
 diff --git a/aperture/config-examples/pool-aperture-mainnet.toml b/aperture/config-examples/pool-aperture-mainnet.toml
 new file mode 100644
-index 00000000..b8ddf931
+index 00000000..06c7ebcd
 --- /dev/null
 +++ b/aperture/config-examples/pool-aperture-mainnet.toml
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,30 @@
 +# SRI pool for ApertureCoin (SCIENCE) mainnet, fed by sv2-tp next to apertured.
 +# Start sv2-tp from the ApertureCoin repository (contrib/sv2-tp) and copy the
 +# "authority key" it logs into [template_provider_type.Sv2Tp].public_key.
@@ -953,15 +2681,20 @@ index 00000000..b8ddf931
 +# clients take the same value from APERTURE_POW_DIM (or APERTURE_NETWORK).
 +aperture_pow_dim = 512
 +
++# ApertureMatMul v2 (useful work): the protocol model file the node loads with
++# -protocolmodel. Every v2 share's activation panel is checked against the pool's
++# own forward pass unless aperture_verify_panels = false.
++aperture_protocol_model = "/path/to/protocol-model.apm"
++
 +[template_provider_type.Sv2Tp]
 +address = "127.0.0.1:8442"
 +public_key = "<sv2-tp authority key>"
 diff --git a/aperture/config-examples/pool-aperture-regtest.toml b/aperture/config-examples/pool-aperture-regtest.toml
 new file mode 100644
-index 00000000..6a58db37
+index 00000000..0bd930a0
 --- /dev/null
 +++ b/aperture/config-examples/pool-aperture-regtest.toml
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,28 @@
 +# SRI pool for ApertureCoin (SCIENCE) regtest, fed by sv2-tp next to apertured.
 +# Start sv2-tp from the ApertureCoin repository (contrib/sv2-tp) and copy the
 +# "authority key" it logs into [template_provider_type.Sv2Tp].public_key.
@@ -983,6 +2716,9 @@ index 00000000..6a58db37
 +# match the node, or every share is rejected. Miners, translators and JD
 +# clients take the same value from APERTURE_POW_DIM (or APERTURE_NETWORK).
 +aperture_pow_dim = 32
++
++# ApertureMatMul v2 (useful work): the regtest tiny model (the node's default on regtest).
++aperture_tiny_model = 1
 +
 +[template_provider_type.Sv2Tp]
 +address = "127.0.0.1:18447"
@@ -1073,22 +2809,405 @@ index dcd648b2..c95a4e26 100644
      let hash_as_target = Target::from_le_bytes(raw_hash);
  
 diff --git a/pool-apps/pool/Cargo.toml b/pool-apps/pool/Cargo.toml
-index 0ded797e..1068c1a0 100644
+index 0ded797e..0f64dcac 100644
 --- a/pool-apps/pool/Cargo.toml
 +++ b/pool-apps/pool/Cargo.toml
-@@ -18,6 +18,7 @@ name = "pool_sv2"
+@@ -18,6 +18,8 @@ name = "pool_sv2"
  path = "src/lib/mod.rs"
  
  [dependencies]
 +aperture_pow = { path = "../../aperture/aperture-pow" }
++aperture_pouw = { path = "../../aperture/aperture-pouw" }
  stratum-apps = { version = "0.8.0", path = "../../stratum-apps", features = ["pool"] }
  async-channel = "1.5.1"
  serde = { version = "1.0.89", features = ["derive", "alloc"], default-features = false }
+diff --git a/pool-apps/pool/src/lib/aperture.rs b/pool-apps/pool/src/lib/aperture.rs
+new file mode 100644
+index 00000000..7fcd615f
+--- /dev/null
++++ b/pool-apps/pool/src/lib/aperture.rs
+@@ -0,0 +1,295 @@
++//! ApertureMatMul v2 pooling (proof of useful work, ApertureCoin `doc/pouw-v2.md`).
++//!
++//! - sv2-tp announces each v2 template's embedding-request batch with
++//!   UsefulWorkTemplate (extension 0x4150, msg 0x01). The pool runs the protocol
++//!   model over the batch once per template, which gives the activations every
++//!   ticket must be taken from.
++//! - Miners get the batch with SetUsefulWork (0x4150/0x03) before each
++//!   NewMiningJob of a v2 template. They submit SubmitSharesStandard with the
++//!   winning ticket and its r×r activation panel in a 0x4150 TLV.
++//! - A share is judged by the ticket hash, which is the node's consensus check
++//!   through the `aperture_pouw` bindings. With `aperture_verify_panels`
++//!   (the default), the pool also requires the panel to equal its own
++//!   forward-pass activations. Consensus does not check this (KW hardness holds
++//!   for any A), but the pool policy does: every pooled share is then work on
++//!   the real inference, not on free-chosen matrices.
++//! - A share that meets the network target goes to sv2-tp as
++//!   SubmitUsefulWorkSolution (0x4150/0x02), and sv2-tp builds the v2 block.
++
++use std::{
++    collections::BTreeMap,
++    sync::{Arc, Mutex, OnceLock},
++};
++
++use aperture_pouw::{
++    Model, Work,
++    wire::{self, ShareTicket, Solution, UsefulWork},
++};
++use async_channel::Sender;
++use stratum_apps::{
++    stratum_core::{
++        channels_sv2::aperture as channel_pow,
++        codec_sv2::SerializedFrame,
++        parsers_sv2::{TemplateDistributionOwned, Tlv},
++    },
++    utils::types::OutboundFrame,
++};
++use tracing::{error, info, warn};
++
++pub use stratum_apps::stratum_core::channels_sv2::aperture::VERSION_POWV2;
++
++/// Templates kept for late shares (sv2-tp keeps a similar window).
++const MAX_TEMPLATES: usize = 64;
++
++pub struct TemplateWork {
++    pub useful_work: UsefulWork,
++    pub work: Arc<Work>,
++}
++
++struct State {
++    model: Option<Arc<Model>>,
++    verify_panels: bool,
++    templates: Mutex<BTreeMap<u64, Arc<TemplateWork>>>,
++    tp_sender: Mutex<Option<Sender<OutboundFrame>>>,
++}
++
++static STATE: OnceLock<State> = OnceLock::new();
++
++fn state() -> &'static State {
++    STATE.get_or_init(|| State {
++        model: None,
++        verify_panels: true,
++        templates: Mutex::new(BTreeMap::new()),
++        tp_sender: Mutex::new(None),
++    })
++}
++
++/// Load the protocol model and install the v2 share verifier. Without a model,
++/// v2 templates cannot be pooled (their shares are rejected).
++pub fn init(
++    model_path: Option<&str>,
++    tiny_model_seed: Option<u32>,
++    verify_panels: bool,
++) -> Result<(), String> {
++    let model = match (model_path, tiny_model_seed) {
++        (Some(path), _) => Some(Model::load_file(path)?),
++        (None, Some(seed)) => Some(Model::tiny(seed)?),
++        (None, None) => None,
++    };
++    if let Some(m) = &model {
++        info!(
++            "ApertureMatMul v2: protocol model {} ({} weight matmuls, {} kernels), panel verification {}",
++            hex(&m.model_id()),
++            m.num_ops(),
++            aperture_pouw::backend_name(),
++            if verify_panels { "on" } else { "off" }
++        );
++    } else {
++        info!("ApertureMatMul v2: no protocol model configured; v2 templates cannot be pooled");
++    }
++    STATE
++        .set(State {
++            model,
++            verify_panels,
++            templates: Mutex::new(BTreeMap::new()),
++            tp_sender: Mutex::new(None),
++        })
++        .map_err(|_| "aperture state already initialized".to_string())?;
++    channel_pow::set_powv2_verifier(Box::new(verify_share));
++    Ok(())
++}
++
++pub fn enabled() -> bool {
++    state().model.is_some()
++}
++
++pub fn set_tp_sender(sender: Sender<OutboundFrame>) {
++    *state().tp_sender.lock().unwrap() = Some(sender);
++}
++
++fn hex(b: &[u8]) -> String {
++    b.iter().map(|x| format!("{x:02x}")).collect()
++}
++
++fn raw_frame(bytes: Vec<u8>) -> Option<OutboundFrame> {
++    SerializedFrame::from_bytes(bytes.into())
++        .ok()
++        .map(OutboundFrame::Raw)
++}
++
++/// UsefulWorkTemplate from sv2-tp: run the forward pass (synchronously; the
++/// caller is on a runtime worker via `block_in_place`) and keep it for the
++/// template's jobs and shares. Returns the template id.
++pub fn on_useful_work_template(payload: &[u8]) -> Result<u64, (Option<u64>, String)> {
++    let (template_id, useful_work) =
++        wire::decode_useful_work_template(payload).map_err(|e| (None, e))?;
++    let fail = |e: String| (Some(template_id), e);
++    let model = state().model.clone().ok_or_else(|| {
++        fail("no protocol model configured (aperture_protocol_model / aperture_tiny_model)".into())
++    })?;
++    if useful_work.model_id != model.model_id() {
++        return Err(fail(format!(
++            "template {template_id} uses model {}, the pool has {}",
++            hex(&useful_work.model_id),
++            hex(&model.model_id())
++        )));
++    }
++    let started = std::time::Instant::now();
++    let work = Work::new(model, &useful_work.requests, useful_work.rank as u32).map_err(fail)?;
++    info!(
++        "Useful work for template {}: {} embedding requests, forward pass in {:.1} ms, rank {}",
++        template_id,
++        useful_work.requests.len(),
++        started.elapsed().as_secs_f64() * 1e3,
++        useful_work.rank
++    );
++    let mut templates = state().templates.lock().unwrap();
++    templates.insert(template_id, Arc::new(TemplateWork { useful_work, work }));
++    while templates.len() > MAX_TEMPLATES {
++        templates.pop_first();
++    }
++    Ok(template_id)
++}
++
++/// Template Distribution messages held back while a v2 template's forward pass
++/// is pending, in arrival order. `Some(id)` marks a v2 NewTemplate still
++/// waiting for its UsefulWorkTemplate; the queue drains up to the first one.
++static HELD: Mutex<Vec<(Option<u64>, TemplateDistributionOwned)>> = Mutex::new(Vec::new());
++
++/// A Template Distribution message from sv2-tp. Returns the messages to forward
++/// to the channel manager now (v2 templates wait for their useful work, so no
++/// job is announced before miners can be told its batch).
++pub fn on_template_distribution(msg: TemplateDistributionOwned) -> Vec<TemplateDistributionOwned> {
++    let waiting = match &msg {
++        TemplateDistributionOwned::NewTemplate(t)
++            if enabled() && t.version & VERSION_POWV2 != 0 =>
++        {
++            Some(t.template_id)
++        }
++        _ => None,
++    };
++    let mut held = HELD.lock().unwrap();
++    if held.is_empty() && waiting.is_none() {
++        return vec![msg];
++    }
++    held.push((waiting, msg));
++    Vec::new()
++}
++
++/// The UsefulWorkTemplate of `template_id` was processed (or failed): release
++/// the held messages up to the next template still waiting.
++pub fn release_template(template_id: u64) -> Vec<TemplateDistributionOwned> {
++    let mut held = HELD.lock().unwrap();
++    for entry in held.iter_mut() {
++        if entry.0 == Some(template_id) {
++            entry.0 = None;
++            break;
++        }
++    }
++    let n = held
++        .iter()
++        .position(|(w, _)| w.is_some())
++        .unwrap_or(held.len());
++    held.drain(..n).map(|(_, m)| m).collect()
++}
++
++pub fn template_work(template_id: u64) -> Option<Arc<TemplateWork>> {
++    state().templates.lock().unwrap().get(&template_id).cloned()
++}
++
++/// SetUsefulWork frame for a job of a v2 template.
++pub fn set_useful_work_frame(
++    channel_id: u32,
++    job_id: u32,
++    template_id: u64,
++) -> Option<OutboundFrame> {
++    let tw = template_work(template_id)?;
++    let payload = wire::encode_set_useful_work(channel_id, job_id, &tw.useful_work);
++    raw_frame(wire::frame(
++        wire::EXTENSION_TYPE | wire::CHANNEL_MSG_BIT,
++        wire::MSG_SET_USEFUL_WORK,
++        &payload,
++    ))
++}
++
++/// The ticket TLV of a share, if any.
++pub fn ticket_tlv(tlvs: Option<&[Tlv]>) -> Option<&[u8]> {
++    tlvs?
++        .iter()
++        .find(|t| {
++            t.r#type.extension_type == wire::EXTENSION_TYPE
++                && t.r#type.field_type == wire::TLV_FIELD_SHARE_TICKET
++        })
++        .map(|t| t.value.as_slice())
++}
++
++/// The channel's v2 share check (installed into `channels_sv2`).
++fn verify_share(
++    template_id: Option<u64>,
++    header: &[u8; 80],
++    ticket: &[u8],
++) -> Result<[u8; 32], &'static str> {
++    let st = state();
++    let model = st.model.as_ref().ok_or("useful-work-not-supported")?;
++    let tw = template_id
++        .and_then(template_work)
++        .ok_or("useful-work-unknown-template")?;
++    let share = ShareTicket::decode(ticket).map_err(|_| channel_pow::ERROR_CODE_POWV2_TICKET)?;
++    let rank = tw.work.rank();
++    if share.panel.len() != (rank * rank) as usize {
++        return Err(channel_pow::ERROR_CODE_POWV2_TICKET);
++    }
++    if st.verify_panels {
++        let t = share.ticket;
++        match tw.work.panel(t.op, t.i, t.s) {
++            Some(honest) if honest == share.panel => {}
++            _ => return Err("useful-work-panel-mismatch"),
++        }
++    }
++    let sigma = aperture_pouw::seed(header, &tw.useful_work.batch_root);
++    model
++        .ticket_pow(rank, &sigma, share.ticket, &share.panel)
++        .ok_or(channel_pow::ERROR_CODE_POWV2_TICKET)
++}
++
++/// Forward a v2 block found by a pooled share to sv2-tp.
++pub fn submit_solution(
++    template_id: u64,
++    version: u32,
++    time: u32,
++    nonce: u32,
++    ticket_tlv_value: &[u8],
++    coinbase: Vec<u8>,
++) {
++    let Ok(share) = ShareTicket::decode(ticket_tlv_value) else {
++        error!("v2 block found but its ticket cannot be decoded");
++        return;
++    };
++    let solution = Solution {
++        template_id,
++        version,
++        time,
++        nonce,
++        ticket: share.ticket,
++        panel: share.panel,
++        coinbase,
++    };
++    let bytes = wire::frame(
++        wire::EXTENSION_TYPE,
++        wire::MSG_SUBMIT_USEFUL_WORK_SOLUTION,
++        &solution.encode(),
++    );
++    let sender = state().tp_sender.lock().unwrap().clone();
++    match (sender, raw_frame(bytes)) {
++        (Some(sender), Some(frame)) => {
++            if sender.try_send(frame).is_err() {
++                error!("could not send SubmitUsefulWorkSolution to the Template Provider");
++            } else {
++                info!(
++                    "SubmitUsefulWorkSolution for template {template_id} sent to the Template Provider"
++                );
++            }
++        }
++        _ => warn!("v2 block found but no Template Provider connection to submit it to"),
++    }
++}
+diff --git a/pool-apps/pool/src/lib/channel_manager/mining_message_handler.rs b/pool-apps/pool/src/lib/channel_manager/mining_message_handler.rs
+index 8e243dfe..9f01b530 100644
+--- a/pool-apps/pool/src/lib/channel_manager/mining_message_handler.rs
++++ b/pool-apps/pool/src/lib/channel_manager/mining_message_handler.rs
+@@ -725,7 +725,7 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
+         &mut self,
+         client_id: Option<usize>,
+         msg: SubmitSharesStandardOwned,
+-        _tlv_fields: Option<&[Tlv]>,
++        tlv_fields: Option<&[Tlv]>,
+     ) -> Result<(), Self::Error> {
+         info!("Received SubmitSharesStandard: {msg}");
+         let downstream_id =
+@@ -760,7 +760,9 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
+                             .standard_channels
+                             .with_mut(&channel_id, |standard_channel| {
+                                 let mut messages: Vec<RouteMessageTo> = Vec::new();
+-                                let res = standard_channel.validate_share(msg.clone());
++                                // ApertureCoin: v2 jobs are judged by the ticket in the 0x4150 TLV.
++                                let aperture_ticket = crate::aperture::ticket_tlv(tlv_fields);
++                                let res = standard_channel.validate_share_with_ticket(msg.clone(), aperture_ticket);
+                                 match res {
+                                     Ok(ShareValidationResult::Valid(share_hash)) => {
+                                         let share_accounting = standard_channel.get_share_accounting();
+@@ -796,7 +798,10 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
+                                         info!("SubmitSharesStandard: 💰 Block Found!!! 💰{share_hash}");
+                                         // if we have a template id (i.e.: this was not a custom job)
+                                         // we can propagate the solution to the TP
+-                                        if let Some(template_id) = template_id {
++                                        if let (Some(template_id), Some(ticket)) = (template_id, aperture_ticket.filter(|_| msg.version & crate::aperture::VERSION_POWV2 != 0)) {
++                                            // ApertureCoin v2: sv2-tp rebuilds the block with the ticket and panel.
++                                            crate::aperture::submit_solution(template_id, msg.version, msg.ntime, msg.nonce, ticket, coinbase.clone());
++                                        } else if let Some(template_id) = template_id {
+                                             info!("SubmitSharesStandard: Propagating solution to the Template Provider.");
+                                             let solution = SubmitSolutionOwned {
+                                                 template_id,
+@@ -1031,7 +1036,9 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
+                             .extended_channels
+                             .with_mut(&channel_id, |extended_channel| {
+                                 let mut messages: Vec<RouteMessageTo> = Vec::new();
+-                                let res = extended_channel.validate_share(msg.clone());
++                                // ApertureCoin: v2 jobs are judged by the ticket in the 0x4150 TLV.
++                                let aperture_ticket = crate::aperture::ticket_tlv(tlv_fields);
++                                let res = extended_channel.validate_share_with_ticket(msg.clone(), aperture_ticket);
+                                 match res {
+                                     Ok(ShareValidationResult::Valid(share_hash)) => {
+                                         let share_accounting = extended_channel.get_share_accounting();
+@@ -1065,7 +1072,10 @@ impl HandleMiningMessagesFromClientOwnedAsync for ChannelManager {
+                                         coinbase,
+                                     )) => {
+                                         info!("SubmitSharesExtended: 💰 Block Found!!! 💰{share_hash}");
+-                                        if let Some(template_id) = template_id {
++                                        if let (Some(template_id), Some(ticket)) = (template_id, aperture_ticket.filter(|_| msg.version & crate::aperture::VERSION_POWV2 != 0)) {
++                                            // ApertureCoin v2: sv2-tp rebuilds the block with the ticket and panel.
++                                            crate::aperture::submit_solution(template_id, msg.version, msg.ntime, msg.nonce, ticket, coinbase.clone());
++                                        } else if let Some(template_id) = template_id {
+                                             info!("SubmitSharesExtended: Propagating solution to the Template Provider.");
+                                             let solution = SubmitSolutionOwned {
+                                                 template_id,
+diff --git a/pool-apps/pool/src/lib/channel_manager/mod.rs b/pool-apps/pool/src/lib/channel_manager/mod.rs
+index 203e4bea..b52d37d1 100644
+--- a/pool-apps/pool/src/lib/channel_manager/mod.rs
++++ b/pool-apps/pool/src/lib/channel_manager/mod.rs
+@@ -207,7 +207,16 @@ impl ChannelManager {
+             max_past_jobs: config.max_past_jobs(),
+             pool_tag_string: config.pool_signature().to_string(),
+             coinbase_reward_script: config.coinbase_reward_script().clone(),
+-            supported_extensions: config.supported_extensions().to_vec(),
++            supported_extensions: {
++                // ApertureCoin: with a protocol model the pool pools v2 useful work.
++                let mut exts = config.supported_extensions().to_vec();
++                if crate::aperture::enabled()
++                    && !exts.contains(&aperture_pouw::wire::EXTENSION_TYPE)
++                {
++                    exts.push(aperture_pouw::wire::EXTENSION_TYPE);
++                }
++                exts
++            },
+             required_extensions: config.required_extensions().to_vec(),
+             job_declarator,
+         };
 diff --git a/pool-apps/pool/src/lib/config.rs b/pool-apps/pool/src/lib/config.rs
-index 00076fc0..ecd65f36 100644
+index 00076fc0..73084765 100644
 --- a/pool-apps/pool/src/lib/config.rs
 +++ b/pool-apps/pool/src/lib/config.rs
-@@ -60,6 +60,10 @@ pub struct PoolConfig {
+@@ -60,6 +60,21 @@ pub struct PoolConfig {
      /// `SetCustomMiningJob` retires the active job, so the rate is the client's, not this pool's.
      #[serde(default)]
      max_past_jobs: Option<usize>,
@@ -1096,21 +3215,50 @@ index 00076fc0..ecd65f36 100644
 +    /// When absent, `APERTURE_POW_DIM` / `APERTURE_NETWORK` or 512 applies.
 +    #[serde(default)]
 +    aperture_pow_dim: Option<u32>,
++    /// ApertureMatMul v2 pooling: path of the protocol model (`.apm`), the same
++    /// file the node loads with `-protocolmodel`.
++    #[serde(default)]
++    aperture_protocol_model: Option<String>,
++    /// ApertureMatMul v2 pooling on regtest: seed of the tiny model (`-tinymodel`, 1).
++    #[serde(default)]
++    aperture_tiny_model: Option<u32>,
++    /// Require every v2 share's activation panel to equal the pool's own forward
++    /// pass (default true).
++    #[serde(default)]
++    aperture_verify_panels: Option<bool>,
  }
  
  impl PoolConfig {
-@@ -94,6 +98,7 @@ impl PoolConfig {
+@@ -94,6 +109,10 @@ impl PoolConfig {
              shares_per_minute,
              share_batch_size,
              max_past_jobs: None,
 +            aperture_pow_dim: None,
++            aperture_protocol_model: None,
++            aperture_tiny_model: None,
++            aperture_verify_panels: None,
              log_file: None,
              server_id,
              supported_extensions,
-@@ -151,6 +156,11 @@ impl PoolConfig {
+@@ -151,6 +170,26 @@ impl PoolConfig {
  
      /// Returns the shares per minute.
      /// Past jobs retained per channel, or `None` to use the `channels_sv2` default.
++    /// ApertureMatMul v2 protocol model path, if configured.
++    pub fn aperture_protocol_model(&self) -> Option<&str> {
++        self.aperture_protocol_model.as_deref()
++    }
++
++    /// Tiny (regtest) protocol model seed, if configured.
++    pub fn aperture_tiny_model(&self) -> Option<u32> {
++        self.aperture_tiny_model
++    }
++
++    /// Whether v2 shares must carry the pool's own forward-pass activations.
++    pub fn aperture_verify_panels(&self) -> bool {
++        self.aperture_verify_panels.unwrap_or(true)
++    }
++
 +    /// Configured ApertureMatMul dimension, if any.
 +    pub fn aperture_pow_dim(&self) -> Option<u32> {
 +        self.aperture_pow_dim
@@ -1119,11 +3267,100 @@ index 00076fc0..ecd65f36 100644
      pub fn max_past_jobs(&self) -> Option<usize> {
          self.max_past_jobs
      }
+diff --git a/pool-apps/pool/src/lib/downstream/mod.rs b/pool-apps/pool/src/lib/downstream/mod.rs
+index b6c658c7..4ce42335 100644
+--- a/pool-apps/pool/src/lib/downstream/mod.rs
++++ b/pool-apps/pool/src/lib/downstream/mod.rs
+@@ -320,6 +320,19 @@ impl Downstream {
+             }
+         };
+ 
++        // ApertureCoin: a job of a v2 template is preceded by its useful work
++        // (SetUsefulWork, extension 0x4150), so the miner can run the forward pass.
++        if let Some(frame) = self.aperture_set_useful_work(&msg) {
++            self.downstream_io
++                .downstream_sender
++                .send(frame)
++                .await
++                .map_err(|e| {
++                    error!(?e, "Downstream send failed");
++                    PoolError::disconnect(PoolErrorKind::ChannelErrorSender, self.downstream_id)
++                })?;
++        }
++
+         let message = AnyMessageOwned::Mining(msg);
+         let std_frame = OutboundFrame::from_message(message).map_err(PoolError::shutdown)?;
+ 
+@@ -335,6 +348,56 @@ impl Downstream {
+         Ok(())
+     }
+ 
++    /// SetUsefulWork for a v2 NewMiningJob / NewExtendedMiningJob of this
++    /// downstream's standard or extended channel.
++    fn aperture_set_useful_work(&self, msg: &MiningOwned) -> Option<OutboundFrame> {
++        let (channel_id, job_id, version) = match msg {
++            MiningOwned::NewMiningJob(m) => (m.channel_id, m.job_id, m.version),
++            MiningOwned::NewExtendedMiningJob(m) => (m.channel_id, m.job_id, m.version),
++            _ => return None,
++        };
++        if version & crate::aperture::VERSION_POWV2 == 0 {
++            return None;
++        }
++        let template_id = self
++            .standard_channels
++            .with(&channel_id, |ch| {
++                ch.get_future_job(job_id)
++                    .or(ch.get_active_job().filter(|j| j.get_job_id() == job_id))
++                    .or(ch.get_past_job(job_id))
++                    .map(|j| j.get_template().template_id)
++            })
++            .flatten()
++            .or_else(|| {
++                self.extended_channels
++                    .with(&channel_id, |ch| {
++                        ch.get_future_job(job_id)
++                            .or(ch.get_active_job().filter(|j| j.get_job_id() == job_id))
++                            .or(ch.get_past_job(job_id))
++                            .and_then(|j| match j.get_origin() {
++                                stratum_apps::stratum_core::channels_sv2::server::jobs::JobOrigin::NewTemplate(t) => Some(t.template_id),
++                                _ => None,
++                            })
++                    })
++                    .flatten()
++            });
++        let Some(template_id) = template_id else {
++            warn!(
++                channel_id,
++                job_id, "v2 job without a known template: no SetUsefulWork sent"
++            );
++            return None;
++        };
++        let frame = crate::aperture::set_useful_work_frame(channel_id, job_id, template_id);
++        if frame.is_none() {
++            warn!(
++                channel_id,
++                job_id, template_id, "no useful work for this v2 template"
++            );
++        }
++        frame
++    }
++
+     // Handles incoming messages from the downstream peer.
+     async fn handle_downstream_message(&mut self) -> PoolResult<(), error::Downstream> {
+         let mut sv2_frame = self
 diff --git a/pool-apps/pool/src/lib/mod.rs b/pool-apps/pool/src/lib/mod.rs
-index 0eb06bbd..24676666 100644
+index 0eb06bbd..af8507ed 100644
 --- a/pool-apps/pool/src/lib/mod.rs
 +++ b/pool-apps/pool/src/lib/mod.rs
-@@ -54,6 +54,23 @@ impl PoolSv2 {
+@@ -10,6 +10,7 @@ use tracing::info;
+ 
+ use crate::config::PoolConfig;
+ 
++pub mod aperture;
+ pub mod channel_manager;
+ pub mod config;
+ pub mod downstream;
+@@ -54,6 +55,34 @@ impl PoolSv2 {
      /// If any error occurs during bootstrapping, `start` receives the partially initialized
      /// runtime, gracefully shuts it down, and then returns the error.
      pub async fn start(&self) -> Result<(), PoolErrorKind> {
@@ -1143,10 +3380,96 @@ index 0eb06bbd..24676666 100644
 +                "ApertureMatMul proof of work, dimension {}",
 +                aperture_pow::dim()
 +            );
++            if let Err(e) = crate::aperture::init(
++                self.config.aperture_protocol_model(),
++                self.config.aperture_tiny_model(),
++                self.config.aperture_verify_panels(),
++            ) {
++                tracing::error!("ApertureMatMul v2: {e}");
++                self.mark_stopped();
++                return Err(PoolErrorKind::Custom(format!(
++                    "aperture protocol model: {e}"
++                )));
++            }
 +        }
          let runtime = match PoolRuntime::<Init>::new(self.clone()) {
              Ok(runtime) => runtime,
              Err(err) => {
+diff --git a/pool-apps/pool/src/lib/template_receiver/sv2_tp/mod.rs b/pool-apps/pool/src/lib/template_receiver/sv2_tp/mod.rs
+index bd4923fd..0ef8b2d1 100644
+--- a/pool-apps/pool/src/lib/template_receiver/sv2_tp/mod.rs
++++ b/pool-apps/pool/src/lib/template_receiver/sv2_tp/mod.rs
+@@ -140,6 +140,7 @@ impl Sv2Tp {
+                                         cancellation_token.clone(),
+                                     );
+ 
++                                    crate::aperture::set_tp_sender(outbound_tx.clone());
+                                     let sv2_tp_io = Sv2TpIo {
+                                         channel_manager_receiver,
+                                         channel_manager_sender,
+@@ -275,14 +276,32 @@ impl Sv2Tp {
+                         .map_err(PoolError::shutdown)?
+                         .into_owned();
+ 
+-                self.sv2_tp_io
+-                    .channel_manager_sender
+-                    .send(message)
+-                    .await
+-                    .map_err(|e| {
+-                        error!(error=?e, "Failed to send template distribution message to channel manager.");
+-                        PoolError::shutdown(PoolErrorKind::ChannelErrorSender)
+-                    })?;
++                // ApertureCoin: v2 templates wait for their useful work.
++                for message in crate::aperture::on_template_distribution(message) {
++                    self.forward_to_channel_manager(message)?;
++                }
++            }
++            _ if header.ext_type_without_channel_msg() == aperture_pouw::wire::EXTENSION_TYPE
++                && header.msg_type() == aperture_pouw::wire::MSG_USEFUL_WORK_TEMPLATE =>
++            {
++                // The forward pass runs synchronously so this branch cannot be
++                // cancelled between receiving the batch and releasing its template.
++                let payload = sv2_frame.payload().to_vec();
++                let result = tokio::task::block_in_place(|| {
++                    crate::aperture::on_useful_work_template(&payload)
++                });
++                let template_id = match result {
++                    Ok(id) => Some(id),
++                    Err((id, e)) => {
++                        error!("UsefulWorkTemplate rejected: {e}");
++                        id
++                    }
++                };
++                if let Some(id) = template_id {
++                    for message in crate::aperture::release_template(id) {
++                        self.forward_to_channel_manager(message)?;
++                    }
++                }
+             }
+             _ => {
+                 warn!(
+@@ -295,6 +314,21 @@ impl Sv2Tp {
+         Ok(())
+     }
+ 
++    #[allow(clippy::result_large_err)]
++    fn forward_to_channel_manager(
++        &self,
++        message: TemplateDistributionOwned,
++    ) -> PoolResult<(), error::TemplateProvider> {
++        // Unbounded channel: completes without an await point.
++        self.sv2_tp_io
++            .channel_manager_sender
++            .try_send(message)
++            .map_err(|e| {
++                error!(error=?e, "Failed to send template distribution message to channel manager.");
++                PoolError::shutdown(PoolErrorKind::ChannelErrorSender)
++            })
++    }
++
+     /// Handle messages from channel manager → template provider.
+     ///
+     /// Forwards outbound frames upstream
 diff --git a/stratum-apps/src/config_helpers/coinbase_output/aperture.rs b/stratum-apps/src/config_helpers/coinbase_output/aperture.rs
 new file mode 100644
 index 00000000..42000710
