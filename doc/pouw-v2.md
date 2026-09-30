@@ -61,9 +61,9 @@ Fraud proofs depend on this.
   layers (multiplier and shift, no floating point). Accumulation is exact
   int32. Activations fed to weight matmuls are int8 with
   |a| ≤ β = 127 − r (Variant Z headroom), with **one scale per 256 input
-  channels, which is exactly one ticket K-span (g·r)**. So every ticket tile
-  is a pure int8 product within one scale group, and dequantization happens
-  after the ticket. The normative definition is in `doc/protocol-model.md`.
+  channels**. A ticket's K-block (width r) always lies inside one scale
+  group, so every ticket tile is a pure int8 product, and dequantization
+  happens after the ticket. The normative definition is in `doc/protocol-model.md`.
 - **Nonlinearities.** Integer-only: polynomial GELU, softmax and LayerNorm in
   the style of I-BERT (arXiv 2101.01321), using fixed integer square-root and
   exponent approximations. No floating-point operations anywhere in the
@@ -93,7 +93,6 @@ Construction
 | Symbol | Meaning | Candidate | Regtest |
 |---|---|---|---|
 | `r` | noise rank = tile size (KW: block size equals rank) | 32 | 8 |
-| `g` | tiles per K-span of one ticket | 8 | 2 |
 | `T` | token rows per batch (padded to a multiple of r) | 4096 | 64 |
 
 These values are provisional. The final ones come from the benchmarks in
@@ -126,8 +125,8 @@ batch_root (32)   BLAKE3 commitment to the block's requests (see "Block body")
 op         (u16)  index of the weight matmul in the model graph (layer, projection)
 tile_i     (u16)  token-row tile          0 <= i < T/r
 tile_j     (u16)  output-feature tile     0 <= j < d_out(op)/r
-span_s     (u16)  K-span                  0 <= s < d_in(op)/(g*r)
-panel      (compact size + r*256 int8)  activation panel of the ticket, |a| <= 95
+span_s     (u16)  K-block (width r)       0 <= s < d_in(op)/r
+panel      (compact size + r*r int8)    activation panel of the ticket, |a| <= 95
 ```
 
 - The header's model is implied by height: the `model_id` active at that
@@ -152,7 +151,7 @@ the slices of one ticket, without knowing the batch size.
 ### Tickets
 
 ```
-P[op][i][j][s] = A'[rows i][K-span s] · W'[K-span s][cols j]     r×r int32, g·r³ MACs
+P[op][i][j][s] = A'[rows i][K-block s] · W'[K-block s][cols j]   r×r int32, r³ MACs
 digest         = Fold(P)                                          16 bytes
 pow            = BLAKE3(σ || op || i || j || s || digest)
 valid          iff pow <= target(nBits)
@@ -172,11 +171,24 @@ digest = lane_0 || lane_1 || lane_2 || lane_3
 bounty.
 
 A forward pass over T token rows yields
-Σ_op (T/r)·(d_out/r)·(d_in/(gr)) tickets.
+Σ_op (T/r)·(d_out/r)·(d_in/r) tickets.
 
 For example, a 1B-parameter model with about 2e9 weight MACs per token and
-T = 4096 performs about 8e12 MACs per pass. That is about 3.2e7 tickets of
-g·r³ = 262,144 MACs each.
+T = 4096 performs about 8e12 MACs per pass. That is about 2.4e8 tickets of
+r³ = 32,768 MACs each.
+
+**Why a ticket's K-width equals the rank r.** This is KW's Algorithm 6.1,
+where the block size equals the rank. An earlier draft used a K-span of
+g·r = 256, which is insecure when the miner reuses the same batch across
+nonces, as it normally does:
+- The miner can precompute the clean tile products A·Wᵀ once.
+- Per nonce it then only needs the corrections E_L,i·(E_R,s·Wᵀ_{s,j}) and
+  (A'_{i,s}·F_L,s)·F_R,j. Each costs one r×r×r product per ticket after
+  work that is amortized over i and j.
+- That is about 2r³, against the honest g·r³: a (g/2)-fold shortcut.
+
+With K-width r the corrections cost at least 2r³ against the honest r³, so
+the shortcut is slower than honest mining.
 
 ### Per-layer decode (honest miner)
 
@@ -195,18 +207,19 @@ op's A.
 
 The header message carries a proof bundle:
 
-- the activation panel `A[rows i][K-span s]` (g·r² bytes, 8 KiB);
+- the activation panel `A[rows i][K-block s]` (r² bytes, 1 KiB);
 - nothing for the weights, because every node already holds them.
 
 The verifier:
 
-1. reads the weight panel `W_op[K-span s][cols j]` from its local copy of the
+1. reads the weight panel `W_op[K-block s][cols j]` from its local copy of the
    weights, which is checked against `weights_root` once at startup;
 2. derives the noise slices for op, i, j and s from σ;
 3. computes P, folds it, hashes it, and compares the result with the target.
 
-The cost is about 3·g·r³ ≈ 0.8 M MACs, well under 1 ms. The bundle is about
-8 KiB per header, about 2.1 GB per year.
+The cost is about 3·r³ ≈ 0.1 M MACs. The reference implementation takes
+83 µs on one core. The bundle is about 1 KiB per header, about 0.27 GB per
+year.
 
 The activation panel is **not** authenticated by the header. It does not need
 to be for proof-of-work security, because KW hardness holds for any A. Its
@@ -414,8 +427,27 @@ Implementation status
     3; tampered, partial and repeated claims; immature spends).
   - `protocolmodel_tests/fraud_proofs` covers the proof logic.
 
+- **CPU kernels** (`src/crypto/matmulpow_v2_kernel.{h,cpp}`), with runtime
+  dispatch between scalar and AVX-512 VNNI.
+  - One nonce: ternary noise applied with vector row adds, W′ blocks packed
+    for `vpdpbusd` with a +128 offset correction, a vectorized Fold, and
+    16-lane BLAKE3 for both the noise stream and the ticket hashes.
+  - The integer-profile GEMM runs on the same kernel.
+  - `matmulpow_v2_kernel_tests` checks that every ticket of every backend at
+    r = 8/16/32 is bit-identical to `TicketPoW`.
+  - Used by the in-node miner, `aperture-sv2-miner` (`-kernel=`) and the
+    model forward pass.
+  - Measured on one core of a 2.8 GHz Xeon (AVX-512 VNNI), for a
+    1024 → 1024 op with 64 rows at r = 32:
+
+    | | scalar | AVX-512 VNNI |
+    |---|---|---|
+    | one nonce (2,048 tickets) | 52.2 ms | 3.8 ms (536k tickets/s, 17.6 GMAC/s of ticket work) |
+    | profile GEMM | 6.8 GMAC/s | 32.7 GMAC/s |
+    | header ticket verification | 83 µs | (reference path) |
+
 **Not yet:**
-- optimized CPU and GPU kernels;
+- GPU kernels (see `contrib/gpu-miner`);
 - mainnet and testnet parameters;
 - trimming the panel from the in-memory block index (the Zcash-style
   header-on-disk approach).
@@ -438,7 +470,7 @@ Implementation plan
 4. **Mining.**
    - A regtest in-node miner running a tiny test model.
    - SV2 extensions (done: useful-work extension 0x4150).
-   - GPU kernels: CUTLASS-style IMMA and HIP MFMA with a span-boundary
+   - GPU kernels: CUTLASS-style IMMA and HIP MFMA with a K-block-boundary
      epilogue, plus CPU VNNI/AMX.
 5. **Tests.**
    - Ticket vectors; header sync with bundles; rejection of a weight panel

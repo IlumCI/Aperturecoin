@@ -95,7 +95,7 @@ class PoUWv2Test(BitcoinTestFramework):
         self.sync_blocks()
         hdr = n1.getblockheader(n1.getbestblockhash())
         assert hdr["version"] & 0x100
-        assert_equal(hdr["powv2"]["panel_bytes"], RANK * 256)
+        assert_equal(hdr["powv2"]["panel_bytes"], RANK * RANK)
         assert_equal(hdr["height"], ACTIVATION + 1)
 
         self.log.info("Python and C++ compute the same ticket hash over the real activation panel")
@@ -103,7 +103,7 @@ class PoUWv2Test(BitcoinTestFramework):
             bh = n0.getblockhash(h)
             header = FromHex(CBlockHeader(), n0.getblockheader(bh, False))
             root, (op, i, j, s) = header.powv2[:32], struct.unpack("<4H", header.powv2[32:40])
-            panel = [b - 256 if b > 127 else b for b in header.powv2[43:]]
+            panel = [b - 256 if b > 127 else b for b in header.powv2[41:]]  # 40 fixed bytes + 1-byte compact size
             assert any(panel), "a real forward pass has non-zero activations"
             header80 = header.serialize()[:80]
             pow_py = v2.ticket_pow(v2.seed(header80, root), RANK, op, v2.tiny_op(op), i, j, s, panel)
@@ -167,9 +167,9 @@ class PoUWv2Test(BitcoinTestFramework):
 
         self.log.info("A ticket panel outside the int8 profile range fails proof of work")
         block = self.python_block(n0)
-        panel = [0] * (RANK * 256)
+        panel = [0] * (RANK * RANK)
         panel[0] = 96  # |a| must be <= 95
-        block.powv2 = block.powv2[:40] + block.powv2[40:43] + bytes(v & 0xff for v in panel)
+        block.powv2 = block.powv2[:41] + bytes(v & 0xff for v in panel)
         block.rehash()
         assert_equal(n0.submitblock(block.serialize().hex()), "high-hash")
 

@@ -65,44 +65,44 @@ void Fold(const int32_t* p, size_t n, unsigned char digest[16])
 bool TicketTile(const unsigned char sigma[32], unsigned int r, const Op& od, const Ticket& t,
                 const int8_t* a_panel, int32_t* p_out)
 {
-    if (r == 0 || r > MAX_RANK || od.d_in % GROUP != 0 || od.d_out % r != 0) return false;
-    if (static_cast<uint64_t>(t.s) * GROUP >= od.d_in || static_cast<uint64_t>(t.j) * r >= od.d_out) return false;
-    const unsigned int G = GROUP;
-    for (unsigned int k = 0; k < r * G; ++k) {
+    // Ticket K-width equals the noise rank r (KW Algorithm 6.1: block size = rank),
+    // so no ticket can be assembled from precomputed clean tiles plus low-rank
+    // corrections for less than the honest r^3 (doc/pouw-v2.md).
+    if (r == 0 || r > MAX_RANK || od.d_in % r != 0 || od.d_out % r != 0) return false;
+    if (static_cast<uint64_t>(t.s) * r >= od.d_in || static_cast<uint64_t>(t.j) * r >= od.d_out) return false;
+    for (unsigned int k = 0; k < r * r; ++k) {
         if (a_panel[k] > QMAX || a_panel[k] < -QMAX) return false;
     }
-    std::vector<int8_t> el(r * r), er(r * G), fl(G * r), fr(r * r);
+    std::vector<int8_t> el(r * r), er(r * r), fl(r * r), fr(r * r);
     Noise(sigma, t.op, Factor::EL, static_cast<uint64_t>(t.i) * r * r, r * r, el.data());
+    Noise(sigma, t.op, Factor::FL, static_cast<uint64_t>(t.s) * r * r, r * r, fl.data());
     for (unsigned int k = 0; k < r; ++k) {
-        Noise(sigma, t.op, Factor::ER, static_cast<uint64_t>(k) * od.d_in + static_cast<uint64_t>(t.s) * G, G, er.data() + k * G);
+        Noise(sigma, t.op, Factor::ER, static_cast<uint64_t>(k) * od.d_in + static_cast<uint64_t>(t.s) * r, r, er.data() + k * r);
         Noise(sigma, t.op, Factor::FR, static_cast<uint64_t>(k) * od.d_out + static_cast<uint64_t>(t.j) * r, r, fr.data() + k * r);
     }
-    Noise(sigma, t.op, Factor::FL, static_cast<uint64_t>(t.s) * G * r, G * r, fl.data());
-
-    // A' = A + E_L[i rows] * E_R[:, span]    (r x G)
-    std::vector<int32_t> ap(r * G);
+    // A' = A + E_L[i rows] * E_R[:, block s]    (r x r)
+    std::vector<int32_t> ap(r * r), wp(r * r);
     for (unsigned int a = 0; a < r; ++a) {
-        for (unsigned int c = 0; c < G; ++c) {
+        for (unsigned int c = 0; c < r; ++c) {
             int32_t e = 0;
-            for (unsigned int k = 0; k < r; ++k) e += el[a * r + k] * er[k * G + c];
-            ap[a * G + c] = a_panel[a * G + c] + e;
+            for (unsigned int k = 0; k < r; ++k) e += el[a * r + k] * er[k * r + c];
+            ap[a * r + c] = a_panel[a * r + c] + e;
         }
     }
-    // W' = W^T[span rows, j cols] + F_L[span] * F_R[:, j cols]    (G x r)
-    std::vector<int32_t> wp(G * r);
-    for (unsigned int k = 0; k < G; ++k) {
+    // W' = W^T[block s rows, j cols] + F_L[block s] * F_R[:, j cols]    (r x r)
+    for (unsigned int k = 0; k < r; ++k) {
         for (unsigned int c = 0; c < r; ++c) {
             int32_t f = 0;
             for (unsigned int q = 0; q < r; ++q) f += fl[k * r + q] * fr[q * r + c];
             const uint64_t row = static_cast<uint64_t>(t.j) * r + c;
-            const uint64_t col = static_cast<uint64_t>(t.s) * G + k;
+            const uint64_t col = static_cast<uint64_t>(t.s) * r + k;
             wp[k * r + c] = od.w[row * od.d_in + col] + f;
         }
     }
     for (unsigned int a = 0; a < r; ++a) {
         for (unsigned int c = 0; c < r; ++c) {
             int32_t acc = 0;
-            for (unsigned int k = 0; k < G; ++k) acc += ap[a * G + k] * wp[k * r + c];
+            for (unsigned int k = 0; k < r; ++k) acc += ap[a * r + k] * wp[k * r + c];
             p_out[a * r + c] = acc;
         }
     }

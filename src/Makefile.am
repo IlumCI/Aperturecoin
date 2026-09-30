@@ -480,6 +480,8 @@ crypto_libbitcoin_crypto_base_a_SOURCES = \
   crypto/matmulpow.h \
   crypto/matmulpow_v2.cpp \
   crypto/matmulpow_v2.h \
+  crypto/matmulpow_v2_kernel.cpp \
+  crypto/matmulpow_v2_kernel.h \
   crypto/poly1305.h \
   crypto/poly1305.cpp \
   crypto/ripemd160.cpp \

@@ -16,10 +16,10 @@
  *
  * Every weight matmul of the protocol model's forward pass is computed on
  * noised operands A' = A + E_L*E_R and W' = W^T + F_L*F_R (ternary, rank r
- * factors derived from the header seed sigma). Each r x r output tile over a
- * GROUP-wide K-span is a lottery ticket:
+ * factors derived from the header seed sigma). Each r x r output tile over an
+ * r-wide K-block is a lottery ticket (tile K-width = noise rank, as in KW):
  *
- *   P      = A'[rows i][span s] * W'[span s][cols j]        (int32)
+ *   P      = A'[rows i][block s] * W'[block s][cols j]      (int32, r^3 MACs)
  *   digest = Fold(P)                                        (16 bytes)
  *   pow    = BLAKE3(sigma || op || i || j || s || digest)   (LE uint256)
  *
@@ -28,7 +28,7 @@
  */
 namespace matmulpow_v2 {
 
-static constexpr unsigned int GROUP = 256; //!< K-span = activation scale group (g*r)
+static constexpr unsigned int GROUP = 256; //!< activation scale group of the integer profile
 static constexpr int QMAX = 95;            //!< |activation| and |weight| bound (127 - 32)
 static constexpr unsigned int MAX_RANK = 32;
 
@@ -63,9 +63,9 @@ void Noise(const unsigned char sigma[32], uint16_t op, Factor f, uint64_t offset
 void Fold(const int32_t* p, size_t n, unsigned char digest[16]);
 
 /**
- * Compute the ticket tile P (r x r) for weights `op_desc` and the r x GROUP
- * activation panel. Returns false if the ticket indices or the panel are out
- * of range.
+ * Compute the ticket tile P (r x r) for weights `op_desc` and the r x r
+ * activation panel A[rows i][block s]. Returns false if the ticket indices or
+ * the panel are out of range.
  */
 bool TicketTile(const unsigned char sigma[32], unsigned int r, const Op& op_desc, const Ticket& t,
                 const int8_t* a_panel, int32_t* p_out);

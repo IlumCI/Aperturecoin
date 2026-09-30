@@ -104,20 +104,28 @@ BOOST_AUTO_TEST_CASE(useful_work_recovery)
                     BOOST_REQUIRE_EQUAL(dec[x * od.d_out + c], clean);
                 }
             }
-            // Ticket (op, i=0, j=1, s=g) from the header-verifiable path.
+        }
+        // Ticket tiles (K-width r) from the header-verifiable path equal the
+        // corresponding r x r x r blocks of the noisy product.
+        for (const uint16_t sb : {uint16_t{0}, uint16_t{5}, static_cast<uint16_t>(od.d_in / r - 1)}) {
             matmulpow_v2::Ticket t;
             t.op = opi;
             t.i = 0;
             t.j = 1;
-            t.s = static_cast<uint16_t>(g);
+            t.s = sb;
+            std::vector<int8_t> panel(r * r);
+            for (unsigned int x = 0; x < r; ++x)
+                std::copy(a.begin() + x * od.d_in + sb * r, a.begin() + x * od.d_in + (sb + 1) * r, panel.begin() + x * r);
             std::vector<int32_t> tile(r * r);
-            std::vector<int8_t> panel(r * 256);
-            for (unsigned int x = 0; x < r; ++x)
-                std::copy(a.begin() + x * od.d_in + g * 256, a.begin() + x * od.d_in + (g + 1) * 256, panel.begin() + x * 256);
             BOOST_REQUIRE(matmulpow_v2::TicketTile(sigma, r, od, t, panel.data(), tile.data()));
-            for (unsigned int x = 0; x < r; ++x)
-                for (unsigned int c = 0; c < r; ++c)
-                    BOOST_CHECK_EQUAL(tile[x * r + c], cn[x * od.d_out + r + c]);
+            for (unsigned int x = 0; x < r; ++x) {
+                for (unsigned int c = 0; c < r; ++c) {
+                    int32_t want = 0;
+                    for (unsigned int k = sb * r; k < (sb + 1) * r; ++k)
+                        want += an[static_cast<size_t>(x) * od.d_in + k] * wn[static_cast<size_t>(k) * od.d_out + r + c];
+                    BOOST_CHECK_EQUAL(tile[x * r + c], want);
+                }
+            }
         }
     }
 }
@@ -127,11 +135,13 @@ BOOST_AUTO_TEST_CASE(ticket_rejects_bad_input)
     const auto model = TinyModel();
     const matmulpow_v2::Op& od = model->Ops()[0];
     unsigned char sigma[32] = {0};
-    std::vector<int8_t> panel(8 * 256, 0);
+    std::vector<int8_t> panel(8 * 8, 0);
     std::vector<int32_t> tile(64);
     matmulpow_v2::Ticket t;
     BOOST_CHECK(matmulpow_v2::TicketTile(sigma, 8, od, t, panel.data(), tile.data()));
-    t.s = 1; // d_in 256 has one span
+    t.s = od.d_in / 8 - 1;
+    BOOST_CHECK(matmulpow_v2::TicketTile(sigma, 8, od, t, panel.data(), tile.data()));
+    t.s = od.d_in / 8; // one past the last K-block
     BOOST_CHECK(!matmulpow_v2::TicketTile(sigma, 8, od, t, panel.data(), tile.data()));
     t.s = 0;
     t.j = od.d_out / 8;

@@ -27,8 +27,8 @@ struct PowV2Proof {
     uint16_t op{0};              //!< weight matmul index in the protocol model
     uint16_t tile_i{0};          //!< activation row tile
     uint16_t tile_j{0};          //!< output column tile
-    uint16_t span_s{0};          //!< K-span (activation scale group)
-    std::vector<int8_t> panel;   //!< r x 256 int8 activation panel of the ticket
+    uint16_t span_s{0};          //!< K-block of width r
+    std::vector<int8_t> panel;   //!< r x r int8 activation panel of the ticket
 
     SERIALIZE_METHODS(PowV2Proof, obj) { READWRITE(obj.batch_root, obj.op, obj.tile_i, obj.tile_j, obj.span_s, obj.panel); }
 

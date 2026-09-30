@@ -93,7 +93,7 @@ class Sv2PoUWTest(BitcoinTestFramework):
                 bh = node.getblockhash(height)
                 hdr = node.getblockheader(bh)
                 assert hdr["version"] & 0x100
-                assert_equal(hdr["powv2"]["panel_bytes"], 8 * 256)
+                assert_equal(hdr["powv2"]["panel_bytes"], 8 * 8)
                 coinbase = node.getblock(bh, 2)["tx"][0]
                 assert_equal(coinbase["vout"][0]["scriptPubKey"]["hex"], payout)
                 for e in node.getblockembeddings(bh):

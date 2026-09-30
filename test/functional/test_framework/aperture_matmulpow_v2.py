@@ -63,19 +63,21 @@ def fold(p):
 
 
 def ticket_pow(sigma, r, op, op_desc, i, j, s, panel):
-    """pow hash (int, little-endian) of ticket (op, i, j, s) over an r x 256 int8 panel."""
+    """pow hash (int, little-endian) of ticket (op, i, j, s) over an r x r int8 panel.
+
+    Ticket K-width equals the noise rank r (KW: block size = rank).
+    """
     din, dout, w = op_desc
-    G = GROUP
     el = noise(sigma, op, EL, i * r * r, r * r)
-    er = sum((noise(sigma, op, ER, k * din + s * G, G) for k in range(r)), [])
-    fl = noise(sigma, op, FL, s * G * r, G * r)
+    er = sum((noise(sigma, op, ER, k * din + s * r, r) for k in range(r)), [])
+    fl = noise(sigma, op, FL, s * r * r, r * r)
     fr = sum((noise(sigma, op, FR, k * dout + j * r, r) for k in range(r)), [])
-    ap = [[panel[a * G + c] + sum(el[a * r + k] * er[k * G + c] for k in range(r)) for c in range(G)] for a in range(r)]
-    wp = [[w[(j * r + c) * din + s * G + k] + sum(fl[k * r + q] * fr[q * r + c] for q in range(r)) for c in range(r)] for k in range(G)]
+    ap = [[panel[a * r + c] + sum(el[a * r + k] * er[k * r + c] for k in range(r)) for c in range(r)] for a in range(r)]
+    wp = [[w[(j * r + c) * din + s * r + k] + sum(fl[k * r + q] * fr[q * r + c] for q in range(r)) for c in range(r)] for k in range(r)]
     p = []
     for a in range(r):
         for c in range(r):
-            p.append(sum(ap[a][k] * wp[k][c] for k in range(G)))
+            p.append(sum(ap[a][k] * wp[k][c] for k in range(r)))
     digest = fold([v if v >= 0 else v + (1 << 32) for v in p])
     h = blake3(sigma + struct.pack("<4H", op, i, j, s) + digest)
     return int.from_bytes(h, "little")
@@ -101,10 +103,10 @@ def ser_extension(root, op, i, j, s, panel):
 
 
 def solve(block, r, root, op=0, panel=None):
-    """Mine a v2 header for `block` (a messages.CBlock) with a zero (or given) panel."""
+    """Mine a v2 header for `block` (a messages.CBlock) with a zero (or given) r x r panel."""
     from .messages import CBlockHeader
     block.nVersion |= CBlockHeader.VERSION_POWV2
-    panel = panel if panel is not None else [0] * (r * GROUP)
+    panel = panel if panel is not None else [0] * (r * r)
     op_desc = tiny_op(op)
     target = target_from_bits(block.nBits)
     while True:

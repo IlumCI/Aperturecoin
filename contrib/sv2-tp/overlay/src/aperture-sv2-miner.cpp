@@ -22,6 +22,7 @@
 #include <base58.h>
 #include <crypto/matmulpow.h>
 #include <crypto/matmulpow_v2.h>
+#include <crypto/matmulpow_v2_kernel.h>
 #include <model/apm.h>
 #include <model/intmodel.h>
 #include <crypto/sha256.h>
@@ -95,6 +96,7 @@ struct Template {
 
 constexpr uint32_t VERSION_POWV2{1 << 8};
 std::unique_ptr<intmodel::IntModel> g_model;
+matmulpow_v2::Backend g_backend{matmulpow_v2::BestBackend()};
 
 struct Job {
     uint64_t generation{0};
@@ -301,15 +303,15 @@ void SubmitV2(Connection& conn, const Job& job, const CBlockHeader& header, cons
 void MineV2(Connection& conn, const Options& opt, const Job& job, const CMutableTransaction& coinbase)
 {
     const UsefulWork& uw{*job.tmpl.useful};
-    const std::vector<matmulpow_v2::Op>& ops{g_model->Ops()};
-    const unsigned int r{uw.rank}, G{matmulpow_v2::GROUP};
     CBlockHeader header;
     header.nVersion = static_cast<int32_t>(job.tmpl.version);
     header.hashPrevBlock = job.prev_hash;
     header.hashMerkleRoot = MerkleRoot(coinbase, job.tmpl.merkle_path);
     header.nTime = std::max<uint32_t>(job.ntime, static_cast<uint32_t>(time(nullptr)));
     header.nBits = job.nbits;
-    std::vector<int8_t> panel(r * G);
+    std::vector<matmulpow_v2::OpInput> inputs;
+    for (const intmodel::OpTrace& tr : uw.trace) inputs.push_back(matmulpow_v2::OpInput{tr.op, tr.rows, tr.q.data()});
+    const uint256 target_le{ArithToUint256(job.target)};
     for (uint32_t nonce = 0; nonce < 0xffffffff && !g_stop; ++nonce) {
         if (g_generation.load() != job.generation) return;
         header.nNonce = nonce;
@@ -318,40 +320,21 @@ void MineV2(Connection& conn, const Options& opt, const Job& job, const CMutable
         seed_input.insert(seed_input.end(), uw.batch_root.begin(), uw.batch_root.end());
         unsigned char sigma[32];
         matmulpow_v2::Seed(seed_input.data(), seed_input.size(), sigma);
-        for (const intmodel::OpTrace& tr : uw.trace) {
-            const matmulpow_v2::Op& od{ops.at(tr.op)};
-            const unsigned int tiles_i{(tr.rows + r - 1) / r}, tiles_j{od.d_out / r}, spans{od.d_in / G};
-            for (unsigned int i = 0; i < tiles_i; ++i) {
-                for (unsigned int s = 0; s < spans; ++s) {
-                    for (unsigned int x = 0; x < r; ++x) {
-                        const unsigned int row{i * r + x};
-                        for (unsigned int k = 0; k < G; ++k) {
-                            panel[x * G + k] = row < tr.rows ? tr.q[static_cast<size_t>(row) * od.d_in + s * G + k] : 0;
-                        }
-                    }
-                    for (unsigned int j = 0; j < tiles_j; ++j) {
-                        matmulpow_v2::Ticket t;
-                        t.op = tr.op;
-                        t.i = static_cast<uint16_t>(i);
-                        t.j = static_cast<uint16_t>(j);
-                        t.s = static_cast<uint16_t>(s);
-                        unsigned char pow[32];
-                        if (!matmulpow_v2::TicketPoW(sigma, r, od, t, panel.data(), pow)) continue;
-                        ++g_hashes;
-                        if (UintToArith256(uint256{std::span<const unsigned char>{pow, 32}}) > job.target) continue;
-                        uint64_t solved{g_solved_generation.load()};
-                        if (solved >= job.generation || !g_solved_generation.compare_exchange_strong(solved, job.generation)) return;
-                        SubmitV2(conn, job, header, t, panel, coinbase);
-                        const int found{++g_found};
-                        std::cout << "found useful-work block: template " << job.tmpl.id << " ticket op=" << t.op << " i=" << t.i
-                                  << " j=" << t.j << " s=" << t.s << " (" << found << " total)" << std::endl;
-                        if (opt.max_blocks > 0 && found >= opt.max_blocks) g_stop = true;
-                        while (!g_stop && g_generation.load() == job.generation) std::this_thread::sleep_for(std::chrono::milliseconds{10});
-                        return;
-                    }
-                }
-            }
-        }
+        // One nonce = the noisy forward-pass matmuls; every r x r x r tile is a ticket.
+        matmulpow_v2::SearchHit hit;
+        uint64_t tickets{0};
+        const bool found{matmulpow_v2::SearchNonce(g_backend, sigma, uw.rank, g_model->Ops(), inputs, target_le.begin(), hit, tickets)};
+        g_hashes += tickets;
+        if (!found) continue;
+        uint64_t solved{g_solved_generation.load()};
+        if (solved >= job.generation || !g_solved_generation.compare_exchange_strong(solved, job.generation)) return;
+        SubmitV2(conn, job, header, hit.ticket, hit.panel, coinbase);
+        const int n{++g_found};
+        std::cout << "found useful-work block: template " << job.tmpl.id << " ticket op=" << hit.ticket.op << " i=" << hit.ticket.i
+                  << " j=" << hit.ticket.j << " s=" << hit.ticket.s << " (" << n << " total)" << std::endl;
+        if (opt.max_blocks > 0 && n >= opt.max_blocks) g_stop = true;
+        while (!g_stop && g_generation.load() == job.generation) std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        return;
     }
 }
 
@@ -483,7 +466,8 @@ void Usage()
                  "                          [-dim=<n>] [-threads=<n>] [-blocks=<n>]\n"
                  "  -dim      ApertureMatMul matrix dimension: 512 (main/test), 32 (regtest)\n"
                  "  -payout   scriptPubKey for the reward (default: OP_TRUE, for testing only)\n"
-                 "  -protocolmodel=<file.apm> / -tinymodel   protocol model for ApertureMatMul v2 templates\n";
+                 "  -protocolmodel=<file.apm> / -tinymodel   protocol model for ApertureMatMul v2 templates\n"
+                 "  -kernel=scalar|avx512-vnni   v2 mining kernel (default: fastest available)\n";
 }
 
 } // namespace
@@ -517,6 +501,12 @@ int main(int argc, char** argv)
             opt.model_path = val;
         } else if (key == "-tinymodel") {
             opt.tiny_model = true;
+        } else if (key == "-kernel") {
+            g_backend = val == "scalar" ? matmulpow_v2::Backend::SCALAR : matmulpow_v2::Backend::AVX512_VNNI;
+            if (!matmulpow_v2::BackendAvailable(g_backend)) {
+                std::cerr << "kernel " << val << " is not available on this CPU\n";
+                return 1;
+            }
         } else {
             Usage();
             return 1;
@@ -539,7 +529,7 @@ int main(int argc, char** argv)
             std::cerr << "cannot load protocol model: " << error << "\n";
             return 1;
         }
-        std::cout << "protocol model " << g_model->Apm().ModelIdHex() << std::endl;
+        std::cout << "protocol model " << g_model->Apm().ModelIdHex() << ", kernel " << matmulpow_v2::BackendName(g_backend) << std::endl;
     }
 
     const int fd{Connect(opt)};

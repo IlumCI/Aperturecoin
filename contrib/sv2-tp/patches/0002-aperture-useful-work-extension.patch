@@ -1,19 +1,20 @@
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 4acbddf..6dbb766 100644
+index 4acbddf..0396394 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -139,6 +139,10 @@ if(BUILD_MINE)
+@@ -139,6 +139,11 @@ if(BUILD_MINE)
      aperture-sv2-miner.cpp
      aperture/blake3_unit.cpp
      ${APERTURE_SRC}/src/crypto/matmulpow.cpp
 +    # ApertureMatMul v2: tickets and the integer protocol model (bit-exact with the node).
 +    ${APERTURE_SRC}/src/crypto/matmulpow_v2.cpp
++    ${APERTURE_SRC}/src/crypto/matmulpow_v2_kernel.cpp
 +    ${APERTURE_SRC}/src/model/apm.cpp
 +    ${APERTURE_SRC}/src/model/intmodel.cpp
    )
    # AFTER: sv2-tp's own headers take precedence; only crypto/matmulpow.h and
    # crypto/blake3/ are taken from the ApertureCoin tree.
-@@ -146,6 +150,7 @@ if(BUILD_MINE)
+@@ -146,6 +151,7 @@ if(BUILD_MINE)
    target_link_libraries(aperture-sv2-miner
      core_interface
      bitcoin_sv2

@@ -6,6 +6,8 @@
 #include <miner.h>
 
 #include <crypto/matmulpow_v2.h>
+#include <crypto/matmulpow_v2_kernel.h>
+#include <arith_uint256.h>
 
 #include <model/embed.h>
 
@@ -111,45 +113,28 @@ bool SolvePowV2(CBlock& block, const std::vector<intmodel::OpTrace>& trace, cons
 {
     const unsigned int r = matmulpow_v2::GetRank();
     const std::vector<matmulpow_v2::Op>& ops = matmulpow_v2::GetOps();
-    if (r == 0 || ops.empty()) return false;
+    if (r == 0 || ops.empty() || max_tries == 0) return false;
     unsigned char seed_input[112], sigma[32];
     block.SerializeSeedInput(seed_input);
     matmulpow_v2::Seed(seed_input, sizeof(seed_input), sigma);
-    std::vector<int8_t> panel(r * matmulpow_v2::GROUP);
-    for (const intmodel::OpTrace& tr : trace) {
-        const matmulpow_v2::Op& od = ops.at(tr.op);
-        const unsigned int tiles_i = (tr.rows + r - 1) / r, tiles_j = od.d_out / r, spans = od.d_in / matmulpow_v2::GROUP;
-        for (unsigned int i = 0; i < tiles_i; ++i) {
-            for (unsigned int s = 0; s < spans; ++s) {
-                for (unsigned int x = 0; x < r; ++x) {
-                    const unsigned int row = i * r + x;
-                    for (unsigned int k = 0; k < matmulpow_v2::GROUP; ++k) {
-                        panel[x * matmulpow_v2::GROUP + k] = row < tr.rows ? tr.q[static_cast<size_t>(row) * od.d_in + s * matmulpow_v2::GROUP + k] : 0;
-                    }
-                }
-                for (unsigned int j = 0; j < tiles_j; ++j) {
-                    if (max_tries == 0) return false;
-                    --max_tries;
-                    matmulpow_v2::Ticket t;
-                    t.op = tr.op;
-                    t.i = static_cast<uint16_t>(i);
-                    t.j = static_cast<uint16_t>(j);
-                    t.s = static_cast<uint16_t>(s);
-                    uint256 pow;
-                    if (!matmulpow_v2::TicketPoW(sigma, r, od, t, panel.data(), pow.begin())) continue;
-                    if (CheckProofOfWork(pow, block.nBits, params)) {
-                        block.powv2.op = t.op;
-                        block.powv2.tile_i = t.i;
-                        block.powv2.tile_j = t.j;
-                        block.powv2.span_s = t.s;
-                        block.powv2.panel = panel;
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    return false;
+    std::vector<matmulpow_v2::OpInput> inputs;
+    for (const intmodel::OpTrace& tr : trace) inputs.push_back(matmulpow_v2::OpInput{tr.op, tr.rows, tr.q.data()});
+    bool negative, overflow;
+    arith_uint256 target;
+    target.SetCompact(block.nBits, &negative, &overflow);
+    if (negative || overflow || target == 0) return false;
+    const uint256 target_le = ArithToUint256(target);
+    matmulpow_v2::SearchHit hit;
+    uint64_t tickets = 0;
+    const bool found = matmulpow_v2::SearchNonce(matmulpow_v2::BestBackend(), sigma, r, ops, inputs, target_le.begin(), hit, tickets);
+    max_tries = tickets >= max_tries ? 0 : max_tries - tickets;
+    if (!found || !CheckProofOfWork(uint256(std::vector<unsigned char>(hit.pow, hit.pow + 32)), block.nBits, params)) return false;
+    block.powv2.op = hit.ticket.op;
+    block.powv2.tile_i = hit.ticket.i;
+    block.powv2.tile_j = hit.ticket.j;
+    block.powv2.span_s = hit.ticket.s;
+    block.powv2.panel = hit.panel;
+    return true;
 }
 
 BlockAssembler::Options::Options() {

@@ -84,7 +84,7 @@ uint256 CBlockHeader::GetUncachedPoWHash(unsigned int dim) const
         uint256 pow_hash{uint256S("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")};
         const unsigned int r = matmulpow_v2::GetRank();
         const std::vector<matmulpow_v2::Op>& ops = matmulpow_v2::GetOps();
-        if (!matmulpow_v2::HasModel() || powv2.op >= ops.size() || powv2.panel.size() != r * matmulpow_v2::GROUP) return pow_hash;
+        if (!matmulpow_v2::HasModel() || powv2.op >= ops.size() || powv2.panel.size() != r * r) return pow_hash;
         unsigned char seed_input[112], sigma[32];
         SerializeSeedInput(seed_input);
         matmulpow_v2::Seed(seed_input, sizeof(seed_input), sigma);

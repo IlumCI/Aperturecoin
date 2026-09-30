@@ -6,6 +6,7 @@
 
 #include <crypto/blake3/blake3.h>
 #include <crypto/common.h>
+#include <crypto/matmulpow_v2_kernel.h>
 #include <tinyformat.h>
 
 #include <algorithm>
@@ -187,16 +188,16 @@ void IntModel::Layer(uint32_t l, std::vector<int64_t>& x, size_t T, std::vector<
                     q[t * din + g * GROUP + k] = static_cast<int8_t>(RDiv(in[t * din + g * GROUP + k] * QMAX, safe));
             }
         }
+        // Exact per-group int8 products (SIMD kernel, bit-identical to the scalar definition).
+        std::vector<int32_t> accs(T * dout * ng);
+        matmulpow_v2::GemmGroups(matmulpow_v2::BestBackend(), q.data(), od.w, T, din, dout, accs.data());
         Mat out(T * dout, 0);
         for (size_t t = 0; t < T; ++t) {
             for (size_t o = 0; o < dout; ++o) {
-                const int8_t* wr = od.w + o * din;
                 const int64_t s = ws.i64(o);
                 int64_t y = 0;
                 for (size_t g = 0; g < ng; ++g) {
-                    int32_t acc = 0;
-                    for (size_t k = g * GROUP; k < (g + 1) * GROUP; ++k) acc += int32_t{q[t * din + k]} * wr[k];
-                    const int64_t tt = RDiv(int64_t{acc} * s, int64_t{1} << WS_SHIFT);
+                    const int64_t tt = RDiv(int64_t{accs[(t * dout + o) * ng + g]} * s, int64_t{1} << WS_SHIFT);
                     y += RDiv(tt * m[t * ng + g], QMAX);
                 }
                 out[t * dout + o] = y;

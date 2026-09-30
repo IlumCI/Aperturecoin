@@ -11,6 +11,7 @@ RAW_BENCH_FILES = \
 GENERATED_BENCH_FILES = $(RAW_BENCH_FILES:.raw=.raw.h)
 
 bench_bench_aperture_SOURCES = \
+  bench/matmulpow_v2.cpp \
   $(RAW_BENCH_FILES) \
   bench/addrman.cpp \
   bench/bench_bitcoin.cpp \
