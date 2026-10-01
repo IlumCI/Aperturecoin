@@ -485,6 +485,12 @@ Implementation status
   - Compile-verified for sm_75/80/86/90, and the device math is checked on
     the host. They have not run on a GPU yet (see that README).
 
+- **Panel trimming.** Once a block index entry is in the block index
+  database, its r × r panel (1 KiB at r = 32) is dropped from memory and read
+  back when a header is served (`CBlockIndex::GetPowV2`), as Zcash does with
+  Equihash solutions. Rewriting a trimmed entry reloads the panel first.
+  Tested by `powv2_index_tests` and `feature_pouw_v2_index.py`.
+
 **Not yet:**
 - running the GPU kernels on a GPU (`gpu_selftest`), and compiling the HIP
   path;
@@ -492,8 +498,7 @@ Implementation status
   1,024 tokens per block);
 - parallel verification of a block's results, and sub-layer fraud-claim
   commitments so that optimistic verification covers long requests;
-- trimming the panel from the in-memory block index (the Zcash-style
-  header-on-disk approach).
+
 
 Implementation plan
 -------------------

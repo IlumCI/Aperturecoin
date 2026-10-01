@@ -201,6 +201,16 @@ CBlockIndex* FindForkInGlobalIndex(const CChain& chain, const CBlockLocator& loc
 
 std::unique_ptr<CBlockTreeDB> pblocktree;
 
+namespace {
+// Trimmed ApertureMatMul v2 panels are read back from the block index database.
+struct PowV2LoaderRegistration {
+    PowV2LoaderRegistration()
+    {
+        g_powv2_loader = [](const uint256& hash, PowV2Proof& out) { return pblocktree && pblocktree->ReadPowV2(hash, out); };
+    }
+} g_powv2_loader_registration;
+} // namespace
+
 bool CheckInputScripts(const CTransaction& tx, TxValidationState &state, const CCoinsViewCache &inputs, unsigned int flags, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, std::vector<CScriptCheck> *pvChecks = nullptr);
 static FILE* OpenUndoFile(const FlatFilePos &pos, bool fReadOnly = false);
 static FlatFileSeq BlockFileSeq();
@@ -2449,14 +2459,19 @@ bool CChainState::FlushStateToDisk(
                     setDirtyFileInfo.erase(it++);
                 }
                 std::vector<const CBlockIndex*> vBlocks;
+                std::vector<CBlockIndex*> written;
                 vBlocks.reserve(setDirtyBlockIndex.size());
+                written.reserve(setDirtyBlockIndex.size());
                 for (std::set<CBlockIndex*>::iterator it = setDirtyBlockIndex.begin(); it != setDirtyBlockIndex.end(); ) {
                     vBlocks.push_back(*it);
+                    written.push_back(*it);
                     setDirtyBlockIndex.erase(it++);
                 }
                 if (!pblocktree->WriteBatchSync(vFiles, nLastBlockFile, vBlocks)) {
                     return AbortNode(state, "Failed to write to block index database");
                 }
+                // The v2 panels are on disk now; keep only the small fields in memory.
+                for (CBlockIndex* pindex : written) pindex->TrimPowV2Panel();
             }
             // Finally remove any pruned files
             if (fFlushForPrune) {

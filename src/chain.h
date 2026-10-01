@@ -180,7 +180,9 @@ public:
     uint32_t nBits{0};
     uint32_t nNonce{0};
     //! ApertureMatMul v2 header extension (empty unless nVersion has VERSION_POWV2).
-    //! Kept in memory with the index; r x 256 bytes per block (doc/pouw-v2.md).
+    //! The r x r activation panel (1 KiB at r = 32) is dropped from memory once
+    //! the entry is in the block index database, and read back on demand by
+    //! GetPowV2() / GetBlockHeader(). Use those instead of reading powv2.panel.
     PowV2Proof powv2;
 
     //! (memory only) Sequential id assigned to distinguish order in which blocks are received.
@@ -221,6 +223,15 @@ public:
         return ret;
     }
 
+    //! Whether the v2 panel has been dropped from memory (see powv2).
+    bool IsPowV2PanelTrimmed() const;
+
+    //! Drop the v2 panel from memory. Only valid once the entry is on disk.
+    void TrimPowV2Panel();
+
+    //! The complete v2 header extension, read from the block index database if trimmed.
+    PowV2Proof GetPowV2() const;
+
     CBlockHeader GetBlockHeader() const
     {
         CBlockHeader block;
@@ -231,7 +242,7 @@ public:
         block.nTime          = nTime;
         block.nBits          = nBits;
         block.nNonce         = nNonce;
-        block.powv2          = powv2;
+        block.powv2          = GetPowV2();
         return block;
     }
 
@@ -322,6 +333,13 @@ public:
 arith_uint256 GetBlockProof(const CBlockIndex& block);
 /** Return the time it would take to redo the work difference between from and to, assuming the current hashrate corresponds to the difficulty at tip, in seconds. */
 int64_t GetBlockProofEquivalentTime(const CBlockIndex& to, const CBlockIndex& from, const CBlockIndex& tip, const Consensus::Params&);
+/**
+ * Reads the stored v2 header extension of a block index entry (set by
+ * validation to read the block index database). Returns false if missing.
+ */
+using PowV2Loader = bool (*)(const uint256& hash, PowV2Proof& out);
+extern PowV2Loader g_powv2_loader;
+
 /** Find the forking point between two chain tips. */
 const CBlockIndex* LastCommonAncestor(const CBlockIndex* pa, const CBlockIndex* pb);
 
@@ -338,6 +356,8 @@ public:
 
     explicit CDiskBlockIndex(const CBlockIndex* pindex) : CBlockIndex(*pindex) {
         hashPrev = (pprev ? pprev->GetBlockHash() : uint256());
+        // A trimmed entry must be written back with its panel.
+        if (pindex->IsPowV2PanelTrimmed()) powv2 = pindex->GetPowV2();
     }
 
     SERIALIZE_METHODS(CDiskBlockIndex, obj)

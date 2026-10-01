@@ -243,6 +243,14 @@ bool CBlockTreeDB::ReadFlag(const std::string &name, bool &fValue) {
     return true;
 }
 
+bool CBlockTreeDB::ReadPowV2(const uint256& hash, PowV2Proof& out)
+{
+    CDiskBlockIndex diskindex;
+    if (!Read(std::make_pair(DB_BLOCK_INDEX, hash), diskindex)) return false;
+    out = diskindex.powv2;
+    return true;
+}
+
 bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, std::function<CBlockIndex*(const uint256&)> insertBlockIndex)
 {
     std::unique_ptr<CDBIterator> pcursor(NewIterator());
@@ -269,6 +277,7 @@ bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, 
                 pindexNew->nBits          = diskindex.nBits;
                 pindexNew->nNonce         = diskindex.nNonce;
                 pindexNew->powv2          = diskindex.powv2;
+                pindexNew->TrimPowV2Panel(); // on disk already; read back on demand
                 pindexNew->nStatus        = diskindex.nStatus;
                 pindexNew->nTx            = diskindex.nTx;
 

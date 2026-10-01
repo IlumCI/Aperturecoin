@@ -5,6 +5,42 @@
 
 #include <chain.h>
 
+#include <mutex>
+#include <stdexcept>
+
+PowV2Loader g_powv2_loader{nullptr};
+
+// Panels are trimmed under cs_main, but headers are also read without it
+// (getblockheader, REST); this lock orders those accesses.
+static std::mutex g_powv2_panel_mutex;
+
+bool CBlockIndex::IsPowV2PanelTrimmed() const
+{
+    if (!(nVersion & CBlockHeader::VERSION_POWV2)) return false;
+    std::lock_guard<std::mutex> lock(g_powv2_panel_mutex);
+    return powv2.panel.empty();
+}
+
+void CBlockIndex::TrimPowV2Panel()
+{
+    if (!(nVersion & CBlockHeader::VERSION_POWV2)) return;
+    std::lock_guard<std::mutex> lock(g_powv2_panel_mutex);
+    std::vector<int8_t>().swap(powv2.panel);
+}
+
+PowV2Proof CBlockIndex::GetPowV2() const
+{
+    {
+        std::lock_guard<std::mutex> lock(g_powv2_panel_mutex);
+        if (!(nVersion & CBlockHeader::VERSION_POWV2) || !powv2.panel.empty()) return powv2;
+    }
+    PowV2Proof stored;
+    if (!g_powv2_loader || !g_powv2_loader(GetBlockHash(), stored) || stored.panel.empty()) {
+        throw std::runtime_error("cannot read the ApertureMatMul v2 panel of block " + GetBlockHash().GetHex() + " from the block index database");
+    }
+    return stored;
+}
+
 /**
  * CChain implementation
  */

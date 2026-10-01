@@ -148,7 +148,7 @@ UniValue blockheaderToJSON(const CBlockIndex* tip, const CBlockIndex* blockindex
         v2.pushKV("tile_i", blockindex->powv2.tile_i);
         v2.pushKV("tile_j", blockindex->powv2.tile_j);
         v2.pushKV("span_s", blockindex->powv2.span_s);
-        v2.pushKV("panel_bytes", (uint64_t)blockindex->powv2.panel.size());
+        v2.pushKV("panel_bytes", (uint64_t)blockindex->GetPowV2().panel.size());
         v2.pushKV("pow_hash", blockindex->GetBlockHeader().GetPoWHash().GetHex());
         result.pushKV("powv2", v2);
     }
