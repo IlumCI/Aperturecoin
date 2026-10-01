@@ -96,6 +96,8 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "createfraudclaim", 1, "index" },
     { "createfraudclaim", 3, "fee" },
     { "searchembeddings", 2, "count" },
+    { "getusefulshare", 0, "nblocks" },
+    { "getusefulshare", 2, "verbose" },
     { "getblockheader", 1, "verbose" },
     { "getchaintxstats", 0, "nblocks" },
     { "gettransaction", 1, "include_watchonly" },

@@ -4,6 +4,7 @@
 
 #include <chain.h>
 #include <chainparams.h>
+#include <crypto/matmulpow_v2.h>
 #include <model/embed.h>
 #include <primitives/block.h>
 #include <rpc/register.h>
@@ -368,6 +369,106 @@ static RPCHelpMan createfraudclaim()
     };
 }
 
+static RPCHelpMan getusefulshare()
+{
+    return RPCHelpMan{"getusefulshare",
+        "\nUseful share of ApertureMatMul v2 mining over a window of blocks (doc/pouw-v2.md, \"Usefulness accounting\").\n"
+        "Each block costs one clean forward pass over its batch plus the ticket search. The search re-noises the\n"
+        "same products for every nonce, so it adds work without adding results. The useful share is the\n"
+        "weight-matmul work spent on the requests the block served, divided by all of that work. The ticket\n"
+        "work is estimated from each block's difficulty (expected tickets x r^3).\n",
+        {
+            {"nblocks", RPCArg::Type::NUM, /* default */ "144", "Number of blocks, counting back from blockhash"},
+            {"blockhash", RPCArg::Type::STR_HEX, /* default */ "chain tip", "Last block of the window"},
+            {"verbose", RPCArg::Type::BOOL, /* default */ "false", "Include one entry per block"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::NUM, "blocks", "v2 blocks in the window"},
+                {RPCResult::Type::NUM, "requests", "Embedding requests served"},
+                {RPCResult::Type::NUM, "served_tokens", "Model input tokens of the served requests (EOS included)"},
+                {RPCResult::Type::NUM, "empty_blocks", "Blocks that served no request"},
+                {RPCResult::Type::NUM, "macs_per_token", "Weight-matmul multiply-accumulates per token of the protocol model"},
+                {RPCResult::Type::NUM, "useful_macs", "served_tokens x macs_per_token"},
+                {RPCResult::Type::NUM, "pass_macs", "Clean forward passes (empty blocks run the EOS-only input)"},
+                {RPCResult::Type::NUM, "ticket_macs", "Expected ticket search work"},
+                {RPCResult::Type::NUM, "useful_share", "useful_macs / (pass_macs + ticket_macs)"},
+                {RPCResult::Type::ARR, "per_block", /* optional */ true, "With verbose",
+                    {{RPCResult::Type::OBJ, "", "",
+                        {
+                            {RPCResult::Type::NUM, "height", "Height"},
+                            {RPCResult::Type::STR_HEX, "hash", "Block hash"},
+                            {RPCResult::Type::NUM, "requests", "Requests served"},
+                            {RPCResult::Type::NUM, "served_tokens", "Tokens served"},
+                            {RPCResult::Type::NUM, "useful_share", "Useful share of this block"},
+                        }}}},
+            }},
+        RPCExamples{HelpExampleCli("getusefulshare", "") + HelpExampleCli("getusefulshare", "2016")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    const intmodel::IntModel* model = embed::GetProtocolModel();
+    if (!model) throw JSONRPCError(RPC_MISC_ERROR, "No protocol model loaded (ApertureMatMul v2 inactive)");
+    const int nblocks = request.params[0].isNull() ? 144 : request.params[0].get_int();
+    if (nblocks < 1) throw JSONRPCError(RPC_INVALID_PARAMETER, "nblocks must be positive");
+    const bool verbose = !request.params[2].isNull() && request.params[2].get_bool();
+
+    double macs_per_token = 0;
+    for (const matmulpow_v2::Op& op : matmulpow_v2::GetOps()) macs_per_token += double(op.d_in) * op.d_out;
+    const double r = matmulpow_v2::GetRank();
+    const double ticket_cost = r * r * r;
+
+    uint64_t blocks = 0, requests = 0, served = 0, empty = 0;
+    double useful = 0, pass = 0, tickets = 0;
+    UniValue per_block(UniValue::VARR);
+    LOCK(cs_main);
+    const CBlockIndex* pindex = ::ChainActive().Tip();
+    if (!request.params[1].isNull()) {
+        pindex = LookupBlockIndex(ParseHashV(request.params[1], "blockhash"));
+        if (!pindex) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+    }
+    for (int k = 0; pindex && k < nblocks; ++k, pindex = pindex->pprev) {
+        if (!(pindex->nVersion & CBlockHeader::VERSION_POWV2)) break;
+        CBlock block;
+        if (!ReadBlockFromDisk(block, pindex, Params().GetConsensus())) throw JSONRPCError(RPC_MISC_ERROR, "Block not available (pruned data)");
+        uint64_t block_tokens = 0;
+        const std::vector<embed::Request> reqs = embed::CollectRequests(block);
+        for (const embed::Request& req : reqs) block_tokens += req.ids.size() + 1;
+        const double block_useful = double(block_tokens) * macs_per_token;
+        const double block_pass = double(std::max<uint64_t>(block_tokens, 1)) * macs_per_token;
+        const double block_tickets = GetBlockProof(*pindex).getdouble() * ticket_cost;
+        ++blocks;
+        requests += reqs.size();
+        served += block_tokens;
+        empty += reqs.empty();
+        useful += block_useful;
+        pass += block_pass;
+        tickets += block_tickets;
+        if (verbose) {
+            UniValue b(UniValue::VOBJ);
+            b.pushKV("height", pindex->nHeight);
+            b.pushKV("hash", pindex->GetBlockHash().GetHex());
+            b.pushKV("requests", (uint64_t)reqs.size());
+            b.pushKV("served_tokens", block_tokens);
+            b.pushKV("useful_share", block_useful / (block_pass + block_tickets));
+            per_block.push_back(b);
+        }
+    }
+    UniValue out(UniValue::VOBJ);
+    out.pushKV("blocks", blocks);
+    out.pushKV("requests", requests);
+    out.pushKV("served_tokens", served);
+    out.pushKV("empty_blocks", empty);
+    out.pushKV("macs_per_token", macs_per_token);
+    out.pushKV("useful_macs", useful);
+    out.pushKV("pass_macs", pass);
+    out.pushKV("ticket_macs", tickets);
+    out.pushKV("useful_share", blocks ? useful / (pass + tickets) : 0.0);
+    if (verbose) out.pushKV("per_block", per_block);
+    return out;
+},
+    };
+}
+
 void RegisterEmbedRPCCommands(CRPCTable& t)
 {
     // clang-format off
@@ -380,6 +481,7 @@ void RegisterEmbedRPCCommands(CRPCTable& t)
         { "embedding",          "searchembeddings",         &searchembeddings,          {"input", "blocks", "count"} },
         { "embedding",          "checkblockembeddings",     &checkblockembeddings,      {"blockhash"} },
         { "embedding",          "createfraudclaim",         &createfraudclaim,          {"blockhash", "index", "address", "fee"} },
+        { "embedding",          "getusefulshare",           &getusefulshare,            {"nblocks", "blockhash", "verbose"} },
     };
     // clang-format on
     for (const auto& c : commands) {

@@ -367,8 +367,34 @@ the reason for the integer inference profile.
 Usefulness accounting
 ---------------------
 
-- **Useful share** = paid request tokens served ÷ total ticket-eligible tokens
-  processed. It is computable from chain data and reported by explorers.
+- **Useful share** = weight-matmul work spent on the requests a block served
+  ÷ all weight-matmul work spent on the block. `getusefulshare` computes it
+  from chain data: the clean forward pass over the block's batch, plus the
+  ticket search, estimated as the block's expected tickets (its chainwork
+  increment) × r³.
+
+**What the number shows at scale.** A block's batch is computed once
+(the clean pass); the ticket search then re-noises the same products for
+every nonce. Search work therefore adds proof of work but no new results.
+For the placeholder model (440 M MACs per token) and the testnet budget of
+1,024 tokens per block, a full block carries 4.5 × 10¹¹ useful MACs. One
+AVX-512 VNNI core searches 536 k tickets/s at r = 32, i.e. 1.8 × 10¹⁰ MAC/s,
+or 2.1 × 10¹² MACs per 120-s block. The steady-state useful share of full
+blocks is therefore about 1 / (1 + 4.7 N) for a network of N such cores:
+18% with one core, under 0.01% at a few thousand. This is the same structural
+limit as other matmul-PoUW chains: on-chain demand per block is bounded,
+hash rate is not.
+
+The candidate fix (not implemented; a consensus change): **bind each attempt
+to new work.** Derive the seed from the batch and the previous block only,
+with no free nonce and no coinbase-dependent field, so that a batch yields a
+fixed number of tickets (its tiles). More tickets then require more batches,
+that is, more inference. Hash rate becomes inference throughput, as in the
+Komargodski–Weinstein model where miners bring their own matrices. Open
+questions: the supply of batches when paid demand is below hash rate (miners
+would buy their own requests, so fees set a cost floor on junk work), how
+non-winning attempts' results reach their payers (pools, off chain), and
+the block-template changes this needs.
 - Miners with no pending requests still run the real model, on junk inputs
   of their choosing. That is visible as a low useful share and earns no fees.
 - **Price discovery.** Request fees compete for batch slots like transaction
