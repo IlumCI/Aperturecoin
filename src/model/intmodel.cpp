@@ -10,7 +10,10 @@
 #include <tinyformat.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <functional>
+#include <thread>
 
 namespace intmodel {
 namespace {
@@ -165,6 +168,24 @@ std::vector<int64_t> IntModel::Tokens(const std::vector<uint32_t>& ids) const
     return x;
 }
 
+/** Run fn(0..n-1) on up to GetGemmThreads() threads (the -par budget). */
+static void ParallelFor(size_t n, const std::function<void(size_t)>& fn)
+{
+    const size_t threads = std::min<size_t>(matmulpow_v2::GetGemmThreads(), n);
+    if (threads <= 1) {
+        for (size_t k = 0; k < n; ++k) fn(k);
+        return;
+    }
+    std::atomic<size_t> next{0};
+    auto worker = [&] {
+        for (size_t k = next++; k < n; k = next++) fn(k);
+    };
+    std::vector<std::thread> pool;
+    for (size_t t = 1; t < threads; ++t) pool.emplace_back(worker);
+    worker();
+    for (std::thread& th : pool) th.join();
+}
+
 void IntModel::Layer(uint32_t l, std::vector<int64_t>& x, size_t T, std::vector<OpTrace>* trace) const
 {
     const apm::Config& c = Config();
@@ -234,8 +255,10 @@ void IntModel::Layer(uint32_t l, std::vector<int64_t>& x, size_t T, std::vector<
     rope_norm(q, NH, *m_model->Get(p + "q_norm"));
     rope_norm(k, KV, *m_model->Get(p + "k_norm"));
     Mat att(T * NH * D, 0);
-    std::vector<int64_t> sc(T), pr(T);
-    for (size_t hh = 0; hh < NH; ++hh) {
+    // Heads are independent and write disjoint parts of att: run them in
+    // parallel (bit-identical to the sequential order).
+    ParallelFor(NH, [&](size_t hh) {
+        std::vector<int64_t> sc(T), pr(T);
         const size_t kv = hh / (NH / KV);
         for (size_t a = 0; a < T; ++a) {
             int64_t mx = INT64_MIN;
@@ -257,7 +280,7 @@ void IntModel::Layer(uint32_t l, std::vector<int64_t>& x, size_t T, std::vector<
                 att[(a * NH + hh) * D + d] = RDiv(acc, ONE);
             }
         }
-    }
+    });
     const Mat o = linear(att, NH * D, op0 + 3);
     for (size_t z = 0; z < x.size(); ++z) x[z] += o[z];
     h = x;

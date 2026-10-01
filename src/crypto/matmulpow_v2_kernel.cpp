@@ -9,7 +9,11 @@
 
 #include <string.h>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <thread>
+#include <vector>
 
 #if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
 #define APERTURE_X86_KERNELS 1
@@ -530,12 +534,34 @@ bool SearchNonce(Backend backend, const unsigned char sigma[32], unsigned int r,
     return true;
 }
 
-void GemmGroups(Backend backend, const int8_t* q, const int8_t* w, size_t T, size_t d_in, size_t d_out, int32_t* acc)
+static std::atomic<unsigned int> g_gemm_threads{1};
+
+void SetGemmThreads(unsigned int threads) { g_gemm_threads = std::max(1u, std::min(threads, 64u)); }
+unsigned int GetGemmThreads() { return g_gemm_threads; }
+
+static void GemmGroupsOne(Backend backend, const int8_t* q, const int8_t* w, size_t T, size_t d_in, size_t d_out, int32_t* acc)
 {
 #ifdef APERTURE_X86_KERNELS
     if (backend == Backend::AVX512_VNNI && BackendAvailable(backend)) return GemmGroupsAvx512(q, w, T, d_in, d_out, acc);
 #endif
     GemmGroupsScalar(q, w, T, d_in, d_out, acc);
+}
+
+void GemmGroups(Backend backend, const int8_t* q, const int8_t* w, size_t T, size_t d_in, size_t d_out, int32_t* acc)
+{
+    // Rows are independent, so splitting them across threads is bit-identical.
+    // Each thread takes at least GEMM_MIN_ROWS rows to amortise thread start-up.
+    static constexpr size_t GEMM_MIN_ROWS = 16;
+    const size_t threads = std::min<size_t>(g_gemm_threads, T / GEMM_MIN_ROWS);
+    if (threads <= 1) return GemmGroupsOne(backend, q, w, T, d_in, d_out, acc);
+    const size_t ng = d_in / GROUP, per = (T + threads - 1) / threads;
+    std::vector<std::thread> pool;
+    for (size_t t0 = per; t0 < T; t0 += per) {
+        const size_t rows = std::min(per, T - t0);
+        pool.emplace_back([=] { GemmGroupsOne(backend, q + t0 * d_in, w, rows, d_in, d_out, acc + t0 * d_out * ng); });
+    }
+    GemmGroupsOne(backend, q, w, std::min(per, T), d_in, d_out, acc);
+    for (std::thread& th : pool) th.join();
 }
 
 void Blake3OneBlock16(Backend backend, const unsigned char* const msgs[16], const size_t lens[16], unsigned char out[16][32])

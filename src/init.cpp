@@ -17,6 +17,7 @@
 #include <blockfilter.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <crypto/matmulpow_v2_kernel.h>
 #include <compat/sanity.h>
 #include <consensus/validation.h>
 #include <fs.h>
@@ -1375,6 +1376,8 @@ bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockA
     script_threads = std::min(script_threads, MAX_SCRIPTCHECK_THREADS);
 
     LogPrintf("Script verification uses %d additional threads\n", script_threads);
+    // Protocol-model inference (v2 result verification, mining) uses the same budget.
+    matmulpow_v2::SetGemmThreads(script_threads + 1);
     if (script_threads >= 1) {
         g_parallel_script_checks = true;
         for (int i = 0; i < script_threads; ++i) {

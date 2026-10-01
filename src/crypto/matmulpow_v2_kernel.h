@@ -76,6 +76,10 @@ bool SearchNonce(Backend backend, const unsigned char sigma[32], unsigned int r,
  */
 void GemmGroups(Backend backend, const int8_t* q, const int8_t* w, size_t T, size_t d_in, size_t d_out, int32_t* acc);
 
+/** Threads GemmGroups may split its rows across (default 1; the node sets -par). */
+void SetGemmThreads(unsigned int threads);
+unsigned int GetGemmThreads();
+
 /** 16 independent single-block BLAKE3 hashes (exposed for tests). */
 void Blake3OneBlock16(Backend backend, const unsigned char* const msgs[16], const size_t lens[16], unsigned char out[16][32]);
 

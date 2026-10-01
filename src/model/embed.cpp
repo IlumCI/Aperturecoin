@@ -3,6 +3,9 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <model/embed.h>
+#include <crypto/matmulpow_v2_kernel.h>
+#include <thread>
+#include <atomic>
 
 #include <consensus/params.h>
 #include <crypto/blake3/blake3.h>
@@ -10,8 +13,10 @@
 #include <crypto/matmulpow_v2.h>
 #include <primitives/block.h>
 
+#include <atomic>
 #include <map>
 #include <mutex>
+#include <thread>
 
 namespace embed {
 namespace {
@@ -371,19 +376,47 @@ std::string CheckBlockEmbeddings(const CBlock& block, const Consensus::Params& p
     if (results.size() != requests.size()) return "bad-embed-result-count";
     const size_t n_states = model->Config().num_hidden_layers + 1, H = model->Config().hidden_size;
     uint64_t tokens = 0;
+    std::vector<std::vector<uint32_t>> inputs;
     for (size_t k = 0; k < requests.size(); ++k) {
-        const std::vector<uint32_t> input = ModelInput(*model, requests[k].ids);
+        std::vector<uint32_t> input = ModelInput(*model, requests[k].ids);
         if (input.empty()) return "bad-embed-request";
         tokens += input.size();
         if (tokens > params.nMaxEmbedTokens) return "bad-embed-tokens";
         if (results[k].outpoint != requests[k].outpoint) return "bad-embed-result-order";
         if (results[k].states.size() != n_states || results[k].embedding.size() != H) return "bad-embed-result-format";
-        // Optimistic chains leave correctness to fraud claims (CheckFraudClaim).
-        if (params.fPowV2Optimistic) continue;
-        std::vector<intmodel::IntModel::StateHash> states;
-        if (Embed(*model, input, nullptr, &states) != results[k].embedding || states != results[k].states) return "bad-embed-result";
+        inputs.push_back(std::move(input));
     }
-    return "";
+    // Optimistic chains leave correctness to fraud claims (CheckFraudClaim).
+    if (params.fPowV2Optimistic) return "";
+
+    // Recompute every result. Long inputs parallelise inside each GEMM (rows);
+    // short ones run side by side, one per thread.
+    auto wrong = [&](size_t k) {
+        std::vector<intmodel::IntModel::StateHash> states;
+        return Embed(*model, inputs[k], nullptr, &states) != results[k].embedding || states != results[k].states;
+    };
+    static constexpr size_t SHORT_INPUT = 32;
+    std::vector<size_t> short_ones;
+    for (size_t k = 0; k < inputs.size(); ++k) {
+        if (inputs[k].size() < SHORT_INPUT) {
+            short_ones.push_back(k);
+        } else if (wrong(k)) {
+            return "bad-embed-result";
+        }
+    }
+    std::atomic<size_t> next{0};
+    std::atomic<bool> bad{false};
+    auto worker = [&] {
+        for (size_t i = next++; i < short_ones.size() && !bad; i = next++) {
+            if (wrong(short_ones[i])) bad = true;
+        }
+    };
+    const size_t threads = std::min<size_t>(matmulpow_v2::GetGemmThreads(), short_ones.size());
+    std::vector<std::thread> pool;
+    for (size_t t = 1; t < threads; ++t) pool.emplace_back(worker);
+    worker();
+    for (std::thread& th : pool) th.join();
+    return bad ? "bad-embed-result" : "";
 }
 
 } // namespace embed

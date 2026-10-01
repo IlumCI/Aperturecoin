@@ -522,13 +522,21 @@ Implementation status
   Equihash solutions. Rewriting a trimmed entry reloads the panel first.
   Tested by `powv2_index_tests` and `feature_pouw_v2_index.py`.
 
+- **Parallel inference and verification.** The protocol model splits GEMM
+  rows and attention heads across the `-par` thread budget, bit-identically
+  (`gemm_groups_threads_bit_identical`); block verification runs short
+  requests side by side. One 512-token request: 50 s on one thread, 22 s on
+  four (4-core VM, AVX-512 VNNI).
+
 **Not yet:**
 - running the GPU kernels on a GPU (`gpu_selftest`), and compiling the HIP
   path;
 - mainnet parameters (testnet: v2 from block 1, r = 32, full verification,
   1,024 tokens per block);
-- parallel verification of a block's results, and sub-layer fraud-claim
-  commitments so that optimistic verification covers long requests;
+- sub-layer fraud-claim commitments so that optimistic verification covers
+  long requests;
+- vectorised integer attention (the remaining cost of long inputs: the
+  scores and the weighted sum are scalar int64 loops);
 
 
 Implementation plan

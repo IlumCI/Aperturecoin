@@ -169,4 +169,28 @@ BOOST_AUTO_TEST_CASE(gemm_groups_match)
     BOOST_CHECK_EQUAL(ref[0], direct);
 }
 
+BOOST_AUTO_TEST_CASE(gemm_groups_threads_bit_identical)
+{
+    FastRandomContext rng(true);
+    const size_t din = 512, dout = 40, ng = din / GROUP;
+    const unsigned int saved = GetGemmThreads();
+    for (size_t T : {1, 15, 16, 33, 100, 257}) {
+        std::vector<int8_t> q(T * din), w(dout * din);
+        for (auto& v : q) v = static_cast<int8_t>(static_cast<int>(rng.randrange(255)) - 127);
+        for (auto& v : w) v = static_cast<int8_t>(static_cast<int>(rng.randrange(255)) - 127);
+        std::vector<int32_t> ref(T * dout * ng);
+        SetGemmThreads(1);
+        GemmGroups(Backend::SCALAR, q.data(), w.data(), T, din, dout, ref.data());
+        for (unsigned int threads : {2u, 3u, 7u, 64u}) {
+            SetGemmThreads(threads);
+            for (Backend b : Backends()) {
+                std::vector<int32_t> got(T * dout * ng, -1);
+                GemmGroups(b, q.data(), w.data(), T, din, dout, got.data());
+                BOOST_CHECK_MESSAGE(got == ref, strprintf("%s T=%u threads=%u", BackendName(b), T, threads));
+            }
+        }
+    }
+    SetGemmThreads(saved);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
