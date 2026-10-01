@@ -39,9 +39,12 @@ class SignetBasicTest(BitcoinTestFramework):
             shared_args3, shared_args3,
         ]
 
+    def skip_test_if_missing_module(self):
+        # -signet maps to the testnet parameters (chainparams.cpp), which need
+        # the protocol model; skip before any node starts.
+        raise SkipTest("Signet not supported")
+
     def run_test(self):
-        if True:
-            raise SkipTest("Signet not supported")
 
         self.log.info("basic tests using OP_TRUE challenge")
 
