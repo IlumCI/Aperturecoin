@@ -397,8 +397,13 @@ non-winning attempts' results reach their payers (pools, off chain), and
 the block-template changes this needs.
 - Miners with no pending requests still run the real model, on junk inputs
   of their choosing. That is visible as a low useful share and earns no fees.
-- **Price discovery.** Request fees compete for batch slots like transaction
-  fees, and a fee-rate policy orders batches.
+- **Price discovery.** Consensus sets a floor per request token
+  (`nMinRequestFeePerToken`; testnet 100 sat, regtest `-powv2tokenfee`):
+  a transaction must pay at least tokens × floor for its requests, checked
+  in mempool acceptance and block connection (`bad-embed-request-fee`).
+  Above the floor, request fees compete for the per-block token budget like
+  transaction fees. `estimaterequestfee` quotes the floor, the wallet pays at
+  least it, and the gateway publishes it in `/v1/models`.
 
 Mining protocol
 ---------------

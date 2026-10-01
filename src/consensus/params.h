@@ -116,6 +116,13 @@ struct Params {
      */
     unsigned int nMaxEmbedTokens{std::numeric_limits<unsigned int>::max()};
     /**
+     * Minimum fee, in satoshis per model input token (EOS included), that a
+     * transaction must pay for its embedding requests from nPowV2Height on.
+     * It prices the compute every validating node spends on a request; the
+     * fee market sets the price above it.
+     */
+    int64_t nMinRequestFeePerToken{0};
+    /**
      * Development fund: every coinbase below nDevFundEndHeight must pay at
      * least nDevFundBasisPoints / 10000 of the block subsidy (fees excluded) to
      * devFundScript.

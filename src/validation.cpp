@@ -777,6 +777,13 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         const std::string reject = CheckFraudClaim(tx, m_view, args.m_chainparams.GetConsensus());
         if (!reject.empty()) return state.Invalid(TxValidationResult::TX_CONSENSUS, reject);
     }
+    if (GetSpendHeight(m_view) >= args.m_chainparams.GetConsensus().nPowV2Height) {
+        const CAmount min_request_fee = embed::MinRequestFee(tx, args.m_chainparams.GetConsensus());
+        if (nFees < min_request_fee) {
+            return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-embed-request-fee",
+                                 strprintf("%d < %d", nFees, min_request_fee));
+        }
+    }
 
     // If fee_out is passed, return the fee to the caller
     if (args.m_fee_out) {
@@ -2252,6 +2259,12 @@ bool CChainState::ConnectBlock(const CBlock& block, BlockValidationState& state,
                 if (!reject.empty()) {
                     return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, reject, "invalid fraud claim");
                 }
+            }
+            if (pindex->nHeight >= chainparams.GetConsensus().nPowV2Height &&
+                txfee < embed::MinRequestFee(tx, chainparams.GetConsensus())) {
+                return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-embed-request-fee",
+                                     strprintf("tx %s pays %d, its requests need %d", tx.GetHash().ToString(), txfee,
+                                               embed::MinRequestFee(tx, chainparams.GetConsensus())));
             }
             nFees += txfee;
             if (!MoneyRange(nFees)) {

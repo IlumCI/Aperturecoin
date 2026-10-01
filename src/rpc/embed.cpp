@@ -369,6 +369,35 @@ static RPCHelpMan createfraudclaim()
     };
 }
 
+static RPCHelpMan estimaterequestfee()
+{
+    return RPCHelpMan{"estimaterequestfee",
+        "\nConsensus minimum fee for an embedding request: tokens (EOS included) x the chain's minimum fee per token.\n"
+        "The transaction also pays its ordinary size-based fee; the larger of the two applies.\n",
+        {INPUT_ARG},
+        RPCResult{RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::NUM, "tokens", "Model input tokens, EOS included"},
+                {RPCResult::Type::STR_AMOUNT, "fee_per_token", "Consensus minimum per token"},
+                {RPCResult::Type::STR_AMOUNT, "min_fee", "Consensus minimum for this request"},
+                {RPCResult::Type::NUM, "block_token_budget", "Tokens a block can serve"},
+            }},
+        RPCExamples{HelpExampleCli("estimaterequestfee", "\"[9707, 1879]\"")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    const std::vector<uint32_t> ids = ParseEmbedInput(request.params[0]);
+    const Consensus::Params& params = Params().GetConsensus();
+    const uint64_t tokens = ids.size() + 1;
+    UniValue out(UniValue::VOBJ);
+    out.pushKV("tokens", tokens);
+    out.pushKV("fee_per_token", ValueFromAmount(params.nMinRequestFeePerToken));
+    out.pushKV("min_fee", ValueFromAmount(static_cast<CAmount>(tokens) * params.nMinRequestFeePerToken));
+    out.pushKV("block_token_budget", (uint64_t)params.nMaxEmbedTokens);
+    return out;
+},
+    };
+}
+
 static RPCHelpMan getusefulshare()
 {
     return RPCHelpMan{"getusefulshare",
@@ -481,6 +510,7 @@ void RegisterEmbedRPCCommands(CRPCTable& t)
         { "embedding",          "searchembeddings",         &searchembeddings,          {"input", "blocks", "count"} },
         { "embedding",          "checkblockembeddings",     &checkblockembeddings,      {"blockhash"} },
         { "embedding",          "createfraudclaim",         &createfraudclaim,          {"blockhash", "index", "address", "fee"} },
+        { "embedding",          "estimaterequestfee",       &estimaterequestfee,        {"input"} },
         { "embedding",          "getusefulshare",           &getusefulshare,            {"nblocks", "blockhash", "verbose"} },
     };
     // clang-format on

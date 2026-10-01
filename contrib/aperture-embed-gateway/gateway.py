@@ -203,8 +203,12 @@ def make_handler(gw):
             try:
                 if self.path == "/v1/models":
                     mid = gw.model()
+                    quote = gw.rpc.call("estimaterequestfee", "[0]")
+                    pricing = {"min_fee_per_token": str(quote["fee_per_token"]), "currency": "SCIENCE",
+                               "block_token_budget": quote["block_token_budget"]}
                     return self.reply(200, {"object": "list", "data": [
-                        {"id": "aperture-" + mid[:16], "object": "model", "owned_by": "aperturecoin", "model_id": mid}]})
+                        {"id": "aperture-" + mid[:16], "object": "model", "owned_by": "aperturecoin", "model_id": mid,
+                         "pricing": pricing}]})
                 if self.path.startswith("/v1/requests/"):
                     txid, _, vout = self.path[len("/v1/requests/"):].partition(":")
                     status, onchain = gw.request_status(txid, int(vout))

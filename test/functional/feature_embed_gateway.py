@@ -75,6 +75,7 @@ class EmbedGatewayTest(BitcoinTestFramework):
         assert_equal(code, 200)
         model_id = node.embed("x")["model_id"]
         assert_equal(models["data"][0]["model_id"], model_id)
+        assert_equal(models["data"][0]["pricing"]["currency"], "SCIENCE")
 
         self.log.info("POST /v1/embeddings: OpenAI shape, exact local result, settled on chain")
         code, res = self.http("POST", "/v1/embeddings", {"input": "hello world", "model": "aperture"})

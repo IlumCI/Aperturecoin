@@ -210,6 +210,8 @@ public:
         consensus.powV2ModelId = "036e18a4393ab94c024da544ca7298358b4b937d8d777d02ff6cda4de95fe626";
         consensus.fPowV2Optimistic = false;
         consensus.nMaxEmbedTokens = 1024;
+        // 100 sat per token: a 512-token request pays at least 0.000512 SCIENCE.
+        consensus.nMinRequestFeePerToken = 100;
         consensus.nRuleChangeActivationThreshold = 1512; // 75% for testchains
         consensus.nMinerConfirmationWindow = 2016;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
@@ -411,6 +413,14 @@ void CRegTestParams::UpdateActivationParametersFromArgs(const ArgsManager& args)
             throw std::runtime_error(strprintf("ApertureMatMul v2 token budget %ld is out of valid range.", tokens));
         }
         consensus.nMaxEmbedTokens = static_cast<unsigned int>(tokens);
+    }
+
+    if (args.IsArgSet("-powv2tokenfee")) {
+        const int64_t fee = args.GetArg("-powv2tokenfee", 0);
+        if (fee < 0 || fee > MAX_MONEY) {
+            throw std::runtime_error(strprintf("ApertureMatMul v2 request fee %ld is out of valid range.", fee));
+        }
+        consensus.nMinRequestFeePerToken = fee;
     }
 
     if (args.IsArgSet("-powv2optimistic")) {

@@ -427,6 +427,19 @@ RPCHelpMan sendembeddingrequest()
     if (!w.CreateTransaction(recipients, tx, fee, change_pos, error, coin_control, fee_calc, true)) {
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, error.original);
     }
+    // The consensus minimum for the request's tokens may exceed the fee-rate fee:
+    // raise the fee rate until the transaction pays it.
+    const CAmount min_request_fee = embed::MinRequestFee(*tx, Params().GetConsensus());
+    for (int attempt = 0; fee < min_request_fee && attempt < 4; ++attempt) {
+        const int64_t vsize = std::max<int64_t>(GetVirtualTransactionSize(*tx), 1);
+        coin_control.m_feerate = CFeeRate(min_request_fee + 1000 * (attempt + 1), vsize);
+        coin_control.fOverrideFeeRate = true;
+        change_pos = -1;
+        if (!w.CreateTransaction(recipients, tx, fee, change_pos, error, coin_control, fee_calc, true)) {
+            throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, error.original);
+        }
+    }
+    if (fee < min_request_fee) throw JSONRPCError(RPC_WALLET_ERROR, "could not reach the minimum request fee");
     w.CommitTransaction(tx, {}, {});
     UniValue out(UniValue::VOBJ);
     out.pushKV("txid", tx->GetHash().GetHex());

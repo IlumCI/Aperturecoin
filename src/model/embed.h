@@ -61,6 +61,10 @@ struct FraudProof {
 };
 
 bool IsRequestScript(const CScript& script);
+/** Model input tokens (EOS included) of all embedding requests in a transaction. */
+uint64_t RequestTokens(const CTransaction& tx);
+/** Consensus minimum fee for the embedding requests of a transaction. */
+int64_t MinRequestFee(const CTransaction& tx, const Consensus::Params& params);
 bool ParseRequest(const CScript& script, std::vector<uint32_t>& ids);
 CScript MakeRequestScript(const std::vector<uint32_t>& ids);
 bool ParseResult(const CScript& script, Result& out);

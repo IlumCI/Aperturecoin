@@ -62,6 +62,21 @@ bool IsRequestScript(const CScript& script)
     return script.size() >= 6 && script[0] == OP_RETURN && script[1] == 4 && memcmp(&script[2], REQ_TAG, 4) == 0;
 }
 
+uint64_t RequestTokens(const CTransaction& tx)
+{
+    uint64_t tokens = 0;
+    for (const CTxOut& out : tx.vout) {
+        std::vector<uint32_t> ids;
+        if (ParseRequest(out.scriptPubKey, ids)) tokens += ids.size() + 1;
+    }
+    return tokens;
+}
+
+int64_t MinRequestFee(const CTransaction& tx, const Consensus::Params& params)
+{
+    return static_cast<int64_t>(RequestTokens(tx)) * params.nMinRequestFeePerToken;
+}
+
 bool ParseRequest(const CScript& script, std::vector<uint32_t>& ids)
 {
     std::vector<std::vector<unsigned char>> pushes;
