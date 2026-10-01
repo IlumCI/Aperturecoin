@@ -644,12 +644,17 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // Embedding requests must be servable by the protocol model, otherwise no
     // valid block could include them (doc/pouw-v2.md).
     if (const intmodel::IntModel* model = embed::GetProtocolModel()) {
+        uint64_t tokens = 0;
         for (const CTxOut& out : tx.vout) {
             std::vector<uint32_t> ids;
-            if (embed::IsRequestScript(out.scriptPubKey) &&
-                (!embed::ParseRequest(out.scriptPubKey, ids) || embed::ModelInput(*model, ids).empty())) {
+            if (!embed::IsRequestScript(out.scriptPubKey)) continue;
+            if (!embed::ParseRequest(out.scriptPubKey, ids) || embed::ModelInput(*model, ids).empty()) {
                 return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-embed-request");
             }
+            tokens += ids.size() + 1;
+        }
+        if (tokens > args.m_chainparams.GetConsensus().nMaxEmbedTokens) {
+            return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-embed-tokens");
         }
     }
 

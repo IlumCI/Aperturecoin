@@ -143,6 +143,7 @@ private:
     uint64_t nBlockTx;
     uint64_t nBlockSigOpsCost;
     unsigned int nBlockRequests;
+    uint64_t nBlockRequestTokens;
     bool fPowV2;
     CAmount nFees;
     CTxMemPool::setEntries inBlock;

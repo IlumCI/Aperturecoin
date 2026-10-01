@@ -410,6 +410,10 @@ RPCHelpMan sendembeddingrequest()
         throw JSONRPCError(RPC_INVALID_PARAMETER, "This model needs an array of token ids");
     }
     if (embed::ModelInput(*model, ids).empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, "input cannot be served by the protocol model");
+    const unsigned int budget = Params().GetConsensus().nMaxEmbedTokens;
+    if (ids.size() + 1 > budget) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("bad-embed-tokens: the input has %u tokens with EOS, a block serves at most %u", ids.size() + 1, budget));
+    }
 
     LOCK(w.cs_wallet);
     EnsureWalletIsUnlocked(&w);

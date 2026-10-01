@@ -355,9 +355,12 @@ std::string CheckBlockEmbeddings(const CBlock& block, const Consensus::Params& p
     }
     if (results.size() != requests.size()) return "bad-embed-result-count";
     const size_t n_states = model->Config().num_hidden_layers + 1, H = model->Config().hidden_size;
+    uint64_t tokens = 0;
     for (size_t k = 0; k < requests.size(); ++k) {
         const std::vector<uint32_t> input = ModelInput(*model, requests[k].ids);
         if (input.empty()) return "bad-embed-request";
+        tokens += input.size();
+        if (tokens > params.nMaxEmbedTokens) return "bad-embed-tokens";
         if (results[k].outpoint != requests[k].outpoint) return "bad-embed-result-order";
         if (results[k].states.size() != n_states || results[k].embedding.size() != H) return "bad-embed-result-format";
         // Optimistic chains leave correctness to fraud claims (CheckFraudClaim).

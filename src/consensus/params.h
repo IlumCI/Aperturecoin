@@ -111,6 +111,11 @@ struct Params {
     /** Maximum embedding requests served per block. */
     unsigned int nMaxEmbedRequests{32};
     /**
+     * Maximum model input tokens (protocol EOS included) served per block. It
+     * bounds the cost of fully verifying a block's results.
+     */
+    unsigned int nMaxEmbedTokens{std::numeric_limits<unsigned int>::max()};
+    /**
      * Development fund: every coinbase below nDevFundEndHeight must pay at
      * least nDevFundBasisPoints / 10000 of the block subsidy (fees excluded) to
      * devFundScript.

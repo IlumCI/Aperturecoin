@@ -171,6 +171,7 @@ void BlockAssembler::resetBlock()
     nBlockWeight = 4000;
     nBlockSigOpsCost = 400;
     nBlockRequests = 0;
+    nBlockRequestTokens = 0;
     fPowV2 = false;
     fIncludeWitness = false;
 
@@ -320,10 +321,18 @@ bool BlockAssembler::TestPackageTransactions(const CTxMemPool::setEntries& packa
     }
     if (fPowV2) {
         unsigned int requests = 0;
+        uint64_t tokens = 0;
         for (CTxMemPool::txiter it : package) {
-            for (const CTxOut& out : it->GetTx().vout) requests += embed::IsRequestScript(out.scriptPubKey);
+            for (const CTxOut& out : it->GetTx().vout) {
+                std::vector<uint32_t> ids;
+                if (embed::ParseRequest(out.scriptPubKey, ids)) {
+                    ++requests;
+                    tokens += ids.size() + 1;
+                }
+            }
         }
         if (nBlockRequests + requests > chainparams.GetConsensus().nMaxEmbedRequests) return false;
+        if (nBlockRequestTokens + tokens > chainparams.GetConsensus().nMaxEmbedTokens) return false;
     }
     return true;
 }
@@ -335,8 +344,10 @@ void BlockAssembler::AddToBlock(CTxMemPool::txiter iter)
         const intmodel::IntModel* model = embed::GetProtocolModel();
         const uint64_t result_weight = model ? WITNESS_SCALE_FACTOR * (model->Config().hidden_size + 32 * (model->Config().num_hidden_layers + 1) + 100) : 0;
         for (const CTxOut& out : iter->GetTx().vout) {
-            if (embed::IsRequestScript(out.scriptPubKey)) {
+            std::vector<uint32_t> ids;
+            if (embed::ParseRequest(out.scriptPubKey, ids)) {
                 ++nBlockRequests;
+                nBlockRequestTokens += ids.size() + 1;
                 nBlockWeight += result_weight;
             }
         }

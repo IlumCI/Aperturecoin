@@ -200,12 +200,16 @@ public:
         consensus.nMatMulDim = 512;
         // ApertureMatMul v2 (useful work) from block 1, with the placeholder
         // protocol model Qwen3-Embedding-0.6B in the integer profile
-        // (doc/protocol-model.md). Results are verified optimistically, so the
-        // fraud-proof game runs on testnet (doc/pouw-v2.md, testnet gate 4).
+        // (doc/protocol-model.md). Results are fully verified: a fraud claim
+        // carries one layer's state (8 KiB per token for this model), so
+        // optimistic verification needs sub-layer commitments first. The token
+        // budget bounds full verification to about one minute of one CPU core
+        // per block.
         consensus.nPowV2Height = 1;
         consensus.nPowV2Rank = 32;
         consensus.powV2ModelId = "036e18a4393ab94c024da544ca7298358b4b937d8d777d02ff6cda4de95fe626";
-        consensus.fPowV2Optimistic = true;
+        consensus.fPowV2Optimistic = false;
+        consensus.nMaxEmbedTokens = 1024;
         consensus.nRuleChangeActivationThreshold = 1512; // 75% for testchains
         consensus.nMinerConfirmationWindow = 2016;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
@@ -399,6 +403,14 @@ void CRegTestParams::UpdateActivationParametersFromArgs(const ArgsManager& args)
             throw std::runtime_error(strprintf("ApertureMatMul v2 activation height %ld is out of valid range.", height));
         }
         consensus.nPowV2Height = static_cast<int>(height);
+    }
+
+    if (args.IsArgSet("-powv2maxtokens")) {
+        const int64_t tokens = args.GetArg("-powv2maxtokens", 0);
+        if (tokens < 1 || tokens > std::numeric_limits<unsigned int>::max()) {
+            throw std::runtime_error(strprintf("ApertureMatMul v2 token budget %ld is out of valid range.", tokens));
+        }
+        consensus.nMaxEmbedTokens = static_cast<unsigned int>(tokens);
     }
 
     if (args.IsArgSet("-powv2optimistic")) {

@@ -2,9 +2,16 @@ ApertureMatMul v2: proof of useful work by protocol-model inference (specificati
 ======================================================================================
 
 Status: implemented. **Testnet runs v2 from block 1** with the placeholder
-protocol model (Qwen3-Embedding-0.6B in the integer profile), rank r = 32 and
-optimistic verification, so the fraud-proof game is exercised on a public
-network. Regtest activates it with `-powv2height=<n>` and uses the built-in
+protocol model (Qwen3-Embedding-0.6B in the integer profile), rank r = 32,
+full verification, and a budget of 1,024 request tokens per block.
+
+Why full verification on testnet: a fraud claim carries one layer's input
+state, 8 KiB per token for this model, so a claim against a long request does
+not fit in a transaction. Optimistic verification needs sub-layer commitments
+first (see "Limits and open items" under fraud proofs). Full verification of
+one 512-token request takes about 39 s on one core of the reference machine,
+which is what the token budget bounds (about 80 s per full block on one core,
+less with parallel verification). Regtest activates it with `-powv2height=<n>` and uses the built-in
 tiny model. Mainnet stays on v1 until the protocol model and `(r, g)` are
 fixed; v2 replaces v1 there before mainnet launches.
 
@@ -347,6 +354,8 @@ every new block and broadcasts claims.
 - Anyone can submit claims that make nodes compute one layer before they are
   rejected. The cost is bounded by one step per claim and by the mempool's
   ordinary limits. There is no dedicated rate limit yet.
+- The per-block token budget (`nMaxEmbedTokens`, regtest `-powv2maxtokens`)
+  bounds the cost of full verification.
 - Full verification (`fPowV2Optimistic = false`) is still the default. It also
   checks the state commitments, so a result with a wrong commitment is
   invalid there as well.
@@ -479,7 +488,10 @@ Implementation status
 **Not yet:**
 - running the GPU kernels on a GPU (`gpu_selftest`), and compiling the HIP
   path;
-- mainnet parameters (testnet: v2 from block 1, r = 32, optimistic);
+- mainnet parameters (testnet: v2 from block 1, r = 32, full verification,
+  1,024 tokens per block);
+- parallel verification of a block's results, and sub-layer fraud-claim
+  commitments so that optimistic verification covers long requests;
 - trimming the panel from the in-memory block index (the Zcash-style
   header-on-disk approach).
 
