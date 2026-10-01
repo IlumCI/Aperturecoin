@@ -221,6 +221,7 @@ BASE_SCRIPTS = [
     'wallet_balance.py --descriptors',
     'feature_nulldummy.py',
     'feature_devfund.py',
+    'feature_devfund_multisig.py',
     'feature_sv2.py',
     'feature_tokens.py',
     'wallet_tokens.py',

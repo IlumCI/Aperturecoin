@@ -391,6 +391,12 @@ void CRegTestParams::UpdateActivationParametersFromArgs(const ArgsManager& args)
         consensus.SegwitHeight = static_cast<int>(height);
     }
 
+    if (args.IsArgSet("-devfundscript")) {
+        const std::string hex = args.GetArg("-devfundscript", "");
+        if (hex.empty() || !IsHex(hex)) throw std::runtime_error("-devfundscript must be a non-empty hex script");
+        consensus.devFundScript = ParseHex(hex);
+    }
+
     if (args.IsArgSet("-devfundendheight")) {
         const int64_t height = args.GetArg("-devfundendheight", consensus.nDevFundEndHeight);
         if (height < 0 || height >= std::numeric_limits<int>::max()) {
