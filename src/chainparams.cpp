@@ -198,6 +198,14 @@ public:
         consensus.fPowNoRetargeting = false;
         consensus.nASERTHalfLife = 60 * 60; // one hour
         consensus.nMatMulDim = 512;
+        // ApertureMatMul v2 (useful work) from block 1, with the placeholder
+        // protocol model Qwen3-Embedding-0.6B in the integer profile
+        // (doc/protocol-model.md). Results are verified optimistically, so the
+        // fraud-proof game runs on testnet (doc/pouw-v2.md, testnet gate 4).
+        consensus.nPowV2Height = 1;
+        consensus.nPowV2Rank = 32;
+        consensus.powV2ModelId = "036e18a4393ab94c024da544ca7298358b4b937d8d777d02ff6cda4de95fe626";
+        consensus.fPowV2Optimistic = true;
         consensus.nRuleChangeActivationThreshold = 1512; // 75% for testchains
         consensus.nMinerConfirmationWindow = 2016;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;

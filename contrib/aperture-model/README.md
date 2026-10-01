@@ -15,7 +15,16 @@ Tooling for the protocol model that ApertureCoin mining runs
 - `test/test_intprofile.py`: golden vectors that every implementation must
   reproduce.
 
-Placeholder model:
+Install the placeholder model for a testnet node (pinned Hugging Face
+revision, SHA-256 checked, converted, model_id checked, installed as
+`<datadir>/models/<model_id>.apm`, where the node looks by default):
+
+```
+pip install -r requirements.txt
+python3 fetch_protocol_model.py [--datadir=~/.aperture]
+```
+
+Manual conversion of the placeholder model:
 
 ```
 pip install -r requirements.txt

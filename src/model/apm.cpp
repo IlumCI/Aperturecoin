@@ -50,12 +50,23 @@ int64_t Tensor::i64(uint64_t k) const { return static_cast<int64_t>(ReadLE64(dat
 
 bool Model::LoadFile(const std::string& path, std::string& error)
 {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
         error = "cannot open " + path;
         return false;
     }
-    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    // One sized read: a byte-wise stream copy of a ~600 MB model takes about a minute.
+    const std::streamoff size = f.tellg();
+    if (size < 0) {
+        error = "cannot read " + path;
+        return false;
+    }
+    std::vector<unsigned char> bytes(static_cast<size_t>(size));
+    f.seekg(0);
+    if (!f.read(reinterpret_cast<char*>(bytes.data()), size)) {
+        error = "cannot read " + path;
+        return false;
+    }
     return Load(std::move(bytes), error);
 }
 

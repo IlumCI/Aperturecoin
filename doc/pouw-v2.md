@@ -1,10 +1,20 @@
 ApertureMatMul v2: proof of useful work by protocol-model inference (specification draft)
 ======================================================================================
 
-Status: implemented and tested on regtest (see "Implementation status"
-below). It is activated with `-powv2height=<n>` and uses the built-in tiny
-protocol model. Mainnet and testnet stay on v1 until the protocol model and
-`(r, g)` are fixed. v2 replaces v1 there before any public network launches.
+Status: implemented. **Testnet runs v2 from block 1** with the placeholder
+protocol model (Qwen3-Embedding-0.6B in the integer profile), rank r = 32 and
+optimistic verification, so the fraud-proof game is exercised on a public
+network. Regtest activates it with `-powv2height=<n>` and uses the built-in
+tiny model. Mainnet stays on v1 until the protocol model and `(r, g)` are
+fixed; v2 replaces v1 there before mainnet launches.
+
+Running a testnet node needs the model file once (about 600 MB):
+
+```
+pip install -r contrib/aperture-model/requirements.txt
+contrib/aperture-model/fetch_protocol_model.py   # installs ~/.aperture/models/<model_id>.apm
+apertured -testnet
+```
 
 Decisions already taken:
 - **Mining runs the network's own model.** The first workload is embedding
@@ -469,7 +479,7 @@ Implementation status
 **Not yet:**
 - running the GPU kernels on a GPU (`gpu_selftest`), and compiling the HIP
   path;
-- mainnet and testnet parameters;
+- mainnet parameters (testnet: v2 from block 1, r = 32, optimistic);
 - trimming the panel from the in-memory block index (the Zcash-style
   header-on-disk approach).
 
