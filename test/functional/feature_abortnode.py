@@ -27,6 +27,9 @@ class AbortNodeTest(BitcoinTestFramework):
 
     def run_test(self):
         self.nodes[0].generate(3)
+        # The block filter index (on by default) reads undo data when blocks
+        # connect; let it finish before the undo file goes away.
+        self.nodes[0].syncwithvalidationinterfacequeue()
         datadir = get_datadir_path(self.options.tmpdir, 0)
 
         # Deleting the undo file will result in reorg failure
