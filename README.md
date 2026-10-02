@@ -16,7 +16,8 @@ Chain parameters
 
 | Parameter          | Value                                                                    |
 |--------------------|--------------------------------------------------------------------------|
-| Proof of work      | testnet: ApertureMatMul v2, useful work: mining runs the protocol embedding model over paid requests ([doc/pouw-v2.md](doc/pouw-v2.md)); mainnet: v1 (n = 512) until v2 parameters are frozen, see [doc/matmulpow.md](doc/matmulpow.md) |
+| Proof of work      | ApertureMatMul v2 from block 1: mining runs the protocol embedding model (Qwen3-Embedding-0.6B, integer profile) over paid requests, results checked by every full node ([doc/pouw-v2.md](doc/pouw-v2.md)) |
+| Inference pricing  | at least 100 sat per request token, 1,024 tokens per block; `estimaterequestfee`, `getusefulshare` |
 | Block interval     | 120 s                                                                    |
 | Difficulty         | ASERT (aserti3-2d), per block, 2-day half-life, anchored at block 1      |
 | Block subsidy      | 50 SCIENCE, halving every 1,051,200 blocks (~4 years)                    |
