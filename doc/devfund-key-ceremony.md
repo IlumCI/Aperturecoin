@@ -32,15 +32,35 @@ tr(H, sortedmulti_a(2, A, B, C))
 and the chainparams line, and runs the spend flow. A 3-of-5 variant is
 `devfund.py script A B C D E --threshold=3`.
 
+If you are the only holder
+--------------------------
+
+Until other people join, all three keys can belong to the project owner.
+2-of-3 then still protects against losing one device or one backup, and
+against one stolen device, but not against the owner. Recommended setup:
+
+- three keys on three separate devices or offline storage media, in at least
+  two physical places;
+- `devfund.py keygen -o key-N.json` on each, run while the device is offline;
+- only the `xonly_pubkey` values leave those devices.
+
+A key can be handed to an independent holder later only by moving the fund
+to a new script (a spend to the new 2-of-3 output for funds already received,
+and a release that changes `devFundScript` for future blocks). Choosing
+independent holders before mainnet avoids that.
+
+Never generate holder keys on a shared or online machine, and never send a
+private key to anyone, including this project's tooling or its assistants.
+
 Procedure
 ---------
 
 1. **Choose holders.** Pick three independent keyholders. If possible, use
    different people, different jurisdictions and different hardware.
-2. **Generate keys offline.** Each holder generates a key on an air-gapped
-   machine (or a signer that supports Taproot script paths), backs it up in
-   two separate physical locations, and records the 32-byte x-only public
-   key.
+2. **Generate keys offline.** Each holder runs `devfund.py keygen -o key.json`
+   on an air-gapped machine (or uses a signer that supports Taproot script
+   paths), backs the key up in two separate physical locations, and records
+   the 32-byte x-only public key.
 3. **Exchange public keys.** Each holder publishes their x-only key with a
    detached signature from a key already known publicly (PGP, or a signed
    message from a published address).

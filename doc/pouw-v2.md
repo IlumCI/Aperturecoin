@@ -1,19 +1,20 @@
 ApertureMatMul v2: proof of useful work by protocol-model inference (specification draft)
 ======================================================================================
 
-Status: implemented. **Testnet runs v2 from block 1** with the placeholder
-protocol model (Qwen3-Embedding-0.6B in the integer profile), rank r = 32,
-full verification, and a budget of 1,024 request tokens per block.
+Status: implemented. **Testnet and mainnet run v2 from block 1** with the
+launch protocol model (Qwen3-Embedding-0.6B in the integer profile), rank
+r = 32, full verification, a budget of 1,024 request tokens per block and a
+floor of 100 sat per request token.
 
-Why full verification on testnet: a fraud claim carries one layer's input
-state, 8 KiB per token for this model, so a claim against a long request does
-not fit in a transaction. Optimistic verification needs sub-layer commitments
-first (see "Limits and open items" under fraud proofs). Full verification of
-one 512-token request takes about 39 s on one core of the reference machine,
-which is what the token budget bounds (about 80 s per full block on one core,
-less with parallel verification). Regtest activates it with `-powv2height=<n>` and uses the built-in
-tiny model. Mainnet stays on v1 until the protocol model and `(r, g)` are
-fixed; v2 replaces v1 there before mainnet launches.
+Why full verification: a fraud claim carries one layer's input state, 8 KiB
+per token for this model, so a claim against a long request does not fit in
+a transaction. Optimistic verification needs sub-layer commitments first (see
+"Limits and open items" under fraud proofs). Full verification of one
+512-token request takes 50 s on one thread and 22 s on four (4-core VM,
+AVX-512 VNNI); the token budget bounds a full block at twice that.
+
+Regtest activates v2 with `-powv2height=<n>` and uses the built-in tiny
+model. v1 remains only for the genesis block.
 
 Running a testnet node needs the model file once (about 600 MB):
 
@@ -385,16 +386,39 @@ blocks is therefore about 1 / (1 + 4.7 N) for a network of N such cores:
 limit as other matmul-PoUW chains: on-chain demand per block is bounded,
 hash rate is not.
 
-The candidate fix (not implemented; a consensus change): **bind each attempt
-to new work.** Derive the seed from the batch and the previous block only,
-with no free nonce and no coinbase-dependent field, so that a batch yields a
-fixed number of tickets (its tiles). More tickets then require more batches,
-that is, more inference. Hash rate becomes inference throughput, as in the
-Komargodski–Weinstein model where miners bring their own matrices. Open
-questions: the supply of batches when paid demand is below hash rate (miners
-would buy their own requests, so fees set a cost floor on junk work), how
-non-winning attempts' results reach their payers (pools, off chain), and
-the block-template changes this needs.
+**Binding each attempt to new work does not close the gap.** The idea was to
+derive the seed from the batch and the previous block only, so that a batch
+yields a fixed number of tickets and more tickets need more inference. It
+fails on two counts:
+
+1. *Anti-theft needs the payout in the seed.* If the seed does not commit to
+   the coinbase, anyone who sees a winning ticket (a pool, a relay) can put
+   it in their own block. Once the payout is in the seed, every new payout
+   key is a fresh seed: keys are free, so attempts are unbounded again. A
+   scarce identity (a bonded, pre-registered miner key) only multiplies the
+   ticket supply by the number of identities and moves security towards
+   stake.
+2. *Activations are reusable.* A request's forward pass does not depend on
+   the other requests in its batch. Re-batching the same requests (subsets,
+   orderings) gives new seeds over cached activations, so a new batch root
+   is not new inference.
+
+This matches the literature: the Komargodski–Weinstein construction removes
+the overhead of useful work (a miner with a real job pays almost nothing
+extra to mine on it), but it does not make extra hash rate useful; Basu
+(arXiv:2606.04819) measures the consequence on Pearl. The defensible claims
+are therefore:
+
+- every ticket multiplies by the pinned protocol weights;
+- every paid request is served in consensus and checked by every full node;
+- the useful share is published, not asserted (`getusefulshare`).
+
+Useful work at hash-rate scale needs demand at hash-rate scale: pools that
+sell inference of the protocol model off chain and mine on their
+customers' activations (the pool's panel-equality policy already enforces
+real activations for pooled shares). That is a business, not a consensus
+rule.
+
 - Miners with no pending requests still run the real model, on junk inputs
   of their choosing. That is visible as a low useful share and earns no fees.
 - **Price discovery.** Consensus sets a floor per request token
@@ -531,8 +555,6 @@ Implementation status
 **Not yet:**
 - running the GPU kernels on a GPU (`gpu_selftest`), and compiling the HIP
   path;
-- mainnet parameters (testnet: v2 from block 1, r = 32, full verification,
-  1,024 tokens per block);
 - sub-layer fraud-claim commitments so that optimistic verification covers
   long requests;
 - vectorised integer attention (the remaining cost of long inputs: the
@@ -581,7 +603,12 @@ This needs three things first:
 - an update rule that is itself fraud-provable;
 - a design for the availability of weights and optimizer state.
 
-It is specified separately once v2 inference is stable.
+It is specified separately once v2 inference is stable. One rule is fixed
+now: **weight activation is human-gated.** The chain may compute candidate
+checkpoints, but a new `model_id` activates only at a height announced in a
+release, after a published evaluation report (capability and safety evals
+included), with the previous model kept as the fallback. Training never
+updates the live consensus model automatically.
 
 Open items
 ----------

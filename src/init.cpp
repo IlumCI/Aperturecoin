@@ -1094,35 +1094,6 @@ bool AppInitParameterInteraction(const ArgsManager& args)
 
     fCheckBlockIndex = args.GetBoolArg("-checkblockindex", chainparams.DefaultConsistencyChecks());
 
-    // ApertureMatMul v2 protocol model (doc/pouw-v2.md, doc/protocol-model.md).
-    {
-        const Consensus::Params& cp = chainparams.GetConsensus();
-        std::string model_path = args.GetArg("-protocolmodel", "");
-        const bool is_regtest = chainparams.NetworkIDString() == CBaseChainParams::REGTEST;
-        if (model_path.empty() && !is_regtest && cp.nPowV2Height != std::numeric_limits<int>::max()) {
-            // Default store, shared by all networks: <datadir>/models/<model_id>.apm
-            // (contrib/aperture-model/fetch_protocol_model.py installs it there).
-            const fs::path store = GetDataDir(false) / "models" / (cp.powV2ModelId + ".apm");
-            if (!fs::exists(store)) {
-                return InitError(Untranslated(strprintf("ApertureMatMul v2 needs the protocol model %s. Install it with "
-                    "contrib/aperture-model/fetch_protocol_model.py --datadir=%s, or pass -protocolmodel=<file.apm>.",
-                    cp.powV2ModelId, GetDataDir(false).string())));
-            }
-            model_path = store.string();
-        }
-        if (cp.nPowV2Height != std::numeric_limits<int>::max() || !model_path.empty()) {
-            if (model_path.empty() && cp.powV2ModelId.empty()) {
-                return InitError(_("ApertureMatMul v2 is active but no -protocolmodel was given"));
-            }
-            std::string error;
-            const bool allow_override = is_regtest && !model_path.empty();
-            if (!embed::LoadProtocolModel(model_path, cp.powV2ModelId, cp.nPowV2Rank, allow_override, error)) {
-                return InitError(Untranslated("Cannot load protocol model: " + error));
-            }
-            const intmodel::IntModel* model = embed::GetProtocolModel();
-            LogPrintf("Protocol model %s loaded (%u weight matmuls, rank %u)\n", model->Apm().ModelIdHex(), model->Ops().size(), cp.nPowV2Rank);
-        }
-    }
     fCheckpointsEnabled = args.GetBoolArg("-checkpoints", DEFAULT_CHECKPOINTS_ENABLED);
 
     hashAssumeValid = uint256S(args.GetArg("-assumevalid", chainparams.GetConsensus().defaultAssumeValid.GetHex()));
@@ -1245,6 +1216,36 @@ bool AppInitParameterInteraction(const ArgsManager& args)
 
     if (args.IsArgSet("-proxy") && args.GetArg("-proxy", "").empty()) {
         return InitError(_("No proxy server specified. Use -proxy=<ip> or -proxy=<ip:port>."));
+    }
+
+    // ApertureMatMul v2 protocol model (doc/pouw-v2.md, doc/protocol-model.md).
+    {
+        const Consensus::Params& cp = chainparams.GetConsensus();
+        std::string model_path = args.GetArg("-protocolmodel", "");
+        const bool is_regtest = chainparams.NetworkIDString() == CBaseChainParams::REGTEST;
+        if (model_path.empty() && !is_regtest && cp.nPowV2Height != std::numeric_limits<int>::max()) {
+            // Default store, shared by all networks: <datadir>/models/<model_id>.apm
+            // (contrib/aperture-model/fetch_protocol_model.py installs it there).
+            const fs::path store = GetDataDir(false) / "models" / (cp.powV2ModelId + ".apm");
+            if (!fs::exists(store)) {
+                return InitError(Untranslated(strprintf("ApertureMatMul v2 needs the protocol model %s. Install it with "
+                    "contrib/aperture-model/fetch_protocol_model.py --datadir=%s, or pass -protocolmodel=<file.apm>.",
+                    cp.powV2ModelId, GetDataDir(false).string())));
+            }
+            model_path = store.string();
+        }
+        if (cp.nPowV2Height != std::numeric_limits<int>::max() || !model_path.empty()) {
+            if (model_path.empty() && cp.powV2ModelId.empty()) {
+                return InitError(_("ApertureMatMul v2 is active but no -protocolmodel was given"));
+            }
+            std::string error;
+            const bool allow_override = is_regtest && !model_path.empty();
+            if (!embed::LoadProtocolModel(model_path, cp.powV2ModelId, cp.nPowV2Rank, allow_override, error)) {
+                return InitError(Untranslated("Cannot load protocol model: " + error));
+            }
+            const intmodel::IntModel* model = embed::GetProtocolModel();
+            LogPrintf("Protocol model %s loaded (%u weight matmuls, rank %u)\n", model->Apm().ModelIdHex(), model->Ops().size(), cp.nPowV2Rank);
+        }
     }
 
     return true;

@@ -32,7 +32,8 @@ class DevFundMultisigTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
         self.setup_clean_chain = True
-        self.privs = [generate_privkey() for _ in range(3)]
+        self.privs = [generate_privkey() for _ in range(2)]
+        self.privs.append(bytes.fromhex(json.loads(tool("keygen"))["privkey"]))  # the CSPRNG key generator
         self.xonly = [compute_xonly_pubkey(k)[0].hex() for k in self.privs]
         self.fund = json.loads(tool("script", *self.xonly, "--hrp=rsci"))
         self.extra_args = [[f"-devfundscript={self.fund['script_pubkey']}", "-devfundendheight=1000"]]

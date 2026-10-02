@@ -100,6 +100,15 @@ public:
         consensus.fPowNoRetargeting = false;
         consensus.nASERTHalfLife = 2 * 24 * 60 * 60; // two days
         consensus.nMatMulDim = 512;
+        // ApertureMatMul v2 (useful work) from block 1 with the launch protocol
+        // model, Qwen3-Embedding-0.6B (Apache-2.0) in the integer profile
+        // (doc/protocol-model.md, "Launch model"). Same parameters as testnet.
+        consensus.nPowV2Height = 1;
+        consensus.nPowV2Rank = 32;
+        consensus.powV2ModelId = "036e18a4393ab94c024da544ca7298358b4b937d8d777d02ff6cda4de95fe626";
+        consensus.fPowV2Optimistic = false;
+        consensus.nMaxEmbedTokens = 1024;
+        consensus.nMinRequestFeePerToken = 100;
         consensus.nRuleChangeActivationThreshold = 9072; // 90% of 10080
         consensus.nMinerConfirmationWindow = 10080; // nPowTargetTimespan / nPowTargetSpacing
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;

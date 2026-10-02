@@ -12,8 +12,29 @@ because proof-of-work tickets and fraud proofs compare exact integers. This
 document defines the model format and the integer arithmetic ("profile") that
 makes that possible.
 
-Current model: placeholder
---------------------------
+Launch model
+------------
+
+Qwen3-Embedding-0.6B is the protocol model for testnet and mainnet launch.
+Why this model:
+
+- **License.** Apache-2.0, so every node may store and redistribute the
+  weights.
+- **Verification cost.** At 0.6 B parameters (600 MB in the profile) every
+  full node can recompute every result on a CPU: one 512-token request takes
+  22 s on four cores, and the per-block budget of 1,024 tokens bounds a full
+  block. A larger model would push full verification to GPUs and shrink the
+  set of people who can run a validating node.
+- **Quality.** It is a current multilingual retrieval model, and the integer
+  profile keeps it close to the float reference (table below: Spearman
+  0.97–0.98, identical top-1 retrieval).
+- **Exactness.** The architecture is fully supported by the integer profile,
+  so results are bit-exact across CPUs and GPUs.
+
+A replacement (a project-trained model, or a newer open model) is a
+scheduled upgrade to a new `model_id` at a height announced in a release.
+Training on chain is specified separately and needs a human-gated weight
+activation (see the training notes in `doc/pouw-v2.md`).
 
 | | |
 |---|---|
@@ -58,9 +79,8 @@ node was run with `-powv2height=102 -protocolmodel=qwen3-embed-0.6b.apm`:
 4. `searchembeddings` over the mined results returned the correct passage
    for 4 of 4 natural-language queries.
 
-The placeholder is replaced when the project's own model is ready. Replacement
-is a scheduled upgrade to a new `model_id` at a height announced in a
-release.
+Replacing the launch model is a scheduled upgrade to a new `model_id` at a
+height announced in a release.
 
 The .apm format
 ---------------

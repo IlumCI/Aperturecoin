@@ -17,6 +17,9 @@ with K1 < K2 < K3 the holders' x-only public keys in byte order.
 
 Commands (a spend is a JSON session file that holders pass around, like a PSBT):
 
+    devfund.py keygen [-o FILE]
+        A new holder key from the OS CSPRNG. Run it on an offline machine; keep
+        the private key file there and publish only the x-only public key.
     devfund.py script KEY KEY KEY [--threshold=2] [--hrp=sci]
         Script, address, descriptor and the chainparams line.
     devfund.py create KEY KEY KEY --utxo=TXID:VOUT:AMOUNT ... --pay=SCRIPTHEX:AMOUNT ... [--fee=SAT] -o session.json
@@ -33,11 +36,12 @@ machine, or with a signer that supports Taproot script paths.
 import argparse
 import json
 import os
+import secrets
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "test", "functional"))
 
-from test_framework.key import compute_xonly_pubkey, sign_schnorr  # noqa: E402
+from test_framework.key import SECP256K1_ORDER, compute_xonly_pubkey, sign_schnorr  # noqa: E402
 from test_framework.messages import COutPoint, CTransaction, CTxIn, CTxInWitness, CTxOut, FromHex, ToHex  # noqa: E402
 from test_framework.script import (  # noqa: E402
     CScript, LEAF_VERSION_TAPSCRIPT, OP_CHECKSIG, OP_CHECKSIGADD, OP_NUMEQUAL, SIGHASH_DEFAULT,
@@ -72,6 +76,19 @@ def fund(keys, threshold):
 def control_block(info):
     leaf = info.leaves["multi"]
     return bytes([leaf.version + info.negflag]) + info.inner_pubkey + leaf.merklebranch
+
+
+def cmd_keygen(args):
+    # secrets (the OS CSPRNG), not the test framework's generate_privkey(), which uses random.
+    priv = (1 + secrets.randbelow(SECP256K1_ORDER - 1)).to_bytes(32, "big")
+    xonly = compute_xonly_pubkey(priv)[0].hex()
+    if args.output:
+        fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf8") as f:
+            json.dump({"privkey": priv.hex(), "xonly_pubkey": xonly}, f, indent=2)
+        print(json.dumps({"xonly_pubkey": xonly, "privkey_file": args.output}, indent=2))
+    else:
+        print(json.dumps({"privkey": priv.hex(), "xonly_pubkey": xonly}, indent=2))
 
 
 def cmd_script(args):
@@ -156,6 +173,8 @@ def cmd_finalize(args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("keygen")
+    p.add_argument("-o", "--output", help="write the key to this new file (mode 600) instead of stdout")
     p = sub.add_parser("script")
     p.add_argument("keys", nargs="+")
     p.add_argument("--threshold", type=int, default=2)
@@ -175,7 +194,7 @@ def main():
     args = ap.parse_args()
     if args.cmd in ("script", "create") and not 1 <= args.threshold <= len(args.keys) <= 16:
         raise SystemExit("threshold must be between 1 and the number of keys (at most 16)")
-    {"script": cmd_script, "create": cmd_create, "sign": cmd_sign, "finalize": cmd_finalize}[args.cmd](args)
+    {"keygen": cmd_keygen, "script": cmd_script, "create": cmd_create, "sign": cmd_sign, "finalize": cmd_finalize}[args.cmd](args)
 
 
 if __name__ == "__main__":

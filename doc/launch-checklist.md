@@ -5,6 +5,33 @@ A fair launch means that nobody has an information or timing advantage at
 genesis. It also means that anyone can check this independently. Every item
 below is a gate: mainnet is not announced until all of them are complete.
 
+0. Viability gate (decided)
+---------------------------
+
+Mainnet is viable when the public testnet shows that the useful-work loop
+works with people outside the project. All of these, measured over the
+testnet soak:
+
+- [ ] **Miners:** at least 5 independent mining operators (not the
+      project), with at least one CPU and one GPU miner.
+- [ ] **Demand:** at least 2,000 paid embedding requests served, from at least
+      3 independent payers (wallets the project does not control).
+- [ ] **Verification:** at least 2 independent full nodes have recomputed
+      every served result (`checkblockembeddings` over the whole soak) with
+      zero mismatches.
+- [ ] **Security assumption:** the bounty on assumption A1 and Fold
+      (`doc/pouw-v2.md`) has been open for at least 4 weeks without a break.
+- [ ] **GPU:** `gpu_selftest` passes on at least one NVIDIA and one AMD GPU.
+- [ ] **Transparency:** the useful share (`getusefulshare 2016`) is published
+      weekly from the first testnet week.
+
+There is deliberately no minimum useful share: it is bounded by paid demand
+per block, not by miner behaviour (`doc/pouw-v2.md`, "Usefulness
+accounting"). It is published, not gated.
+
+With a public testnet running, these gates can be met in about 5 to 6
+weeks; the soak below is the long pole.
+
 1. Testnet soak
 ---------------
 
